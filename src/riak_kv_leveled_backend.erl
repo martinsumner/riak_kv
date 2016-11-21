@@ -35,6 +35,7 @@
          callback/3]).
 
 
+-include("include/riak_kv_index.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -50,7 +51,7 @@
 -record(state, {bookie :: pid(),
                 reference :: reference(),
                 partition :: integer(),
-                config :: config() }).
+                config }).
 
 -type state() :: #state{}.
 
