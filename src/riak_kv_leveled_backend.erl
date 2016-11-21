@@ -38,9 +38,6 @@
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
--export([to_index_key/4,from_index_key/1,
-         to_object_key/2,from_object_key/1,
-         to_key_range/1]).
 -endif.
 
 -define(RIAK_TAG, o_rkv).
@@ -56,8 +53,6 @@
                 config :: config() }).
 
 -type state() :: #state{}.
--type config_option() :: {data_root, string()} | hanoidb:config_option().
--type config() :: [config_option()].
 
 %% ===================================================================
 %% Public API
@@ -80,7 +75,7 @@ capabilities(_, _) ->
     {ok, ?CAPABILITIES}.
 
 %% @doc Start the hanoidb backend
--spec start(integer(), config()) -> {ok, state()} | {error, term()}.
+-spec start(integer(), list()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
     %% Get the data root directory
     case app_helper:get_prop_or_env(data_root, Config, leveleddb) of
