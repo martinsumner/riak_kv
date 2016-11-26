@@ -79,7 +79,7 @@ capabilities(_, _) ->
 -spec start(integer(), list()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
     %% Get the data root directory
-    case app_helper:get_prop_or_env(data_root, Config, leveleddb) of
+    case app_helper:get_prop_or_env(data_root, Config, leveled) of
         undefined ->
             lager:error("Failed to create leveled dir: data_root is not set"),
             {error, data_root_unset};
