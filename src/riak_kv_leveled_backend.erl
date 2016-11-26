@@ -79,35 +79,29 @@ capabilities(_, _) ->
 -spec start(integer(), list()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
     %% Get the data root directory
-    case app_helper:get_prop_or_env(data_root, Config, leveled) of
-        undefined ->
-            lager:info("Config ~w", [Config]),
-            lager:error("Failed to create leveled dir: data_root is not set"),
-            {error, data_root_unset};
-        DataRoot ->
-            case get_data_dir(DataRoot, integer_to_list(Partition)) of
-                {ok, DataDir} ->
-                    case leveled_bookie:book_start(DataDir, 
-                                                    2000, 
-                                                    500000000, 
-                                                    riak_sync) of
-                        {ok, Bookie} ->
-                            Ref = make_ref(),
-                            schedule_journalcompaction(Ref),
-                            {ok, #state{bookie=Bookie,
-                                        reference=Ref,
-                                        partition=Partition,
-                                        config=Config }};
-                        {error, OpenReason}=OpenError ->
-                            lager:error("Failed to open leveled: ~p\n",
-                                            [OpenReason]),
-                            OpenError
-                    end;
-                {error, Reason} ->
-                    lager:error("Failed to start leveled backend: ~p\n",
-                                    [Reason]),
-                    {error, Reason}
-            end
+    DataRoot = "./data/leveled"
+    case get_data_dir(DataRoot, integer_to_list(Partition)) of
+        {ok, DataDir} ->
+            case leveled_bookie:book_start(DataDir, 
+                                            2000, 
+                                            500000000, 
+                                            riak_sync) of
+                {ok, Bookie} ->
+                    Ref = make_ref(),
+                    schedule_journalcompaction(Ref),
+                    {ok, #state{bookie=Bookie,
+                                reference=Ref,
+                                partition=Partition,
+                                config=Config }};
+                {error, OpenReason}=OpenError ->
+                    lager:error("Failed to open leveled: ~p\n",
+                                    [OpenReason]),
+                    OpenError
+            end;
+        {error, Reason} ->
+            lager:error("Failed to start leveled backend: ~p\n",
+                            [Reason]),
+            {error, Reason}
     end.
 
 %% @doc Stop the leveled backend
