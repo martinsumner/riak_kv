@@ -86,7 +86,10 @@ start(Partition, Config) ->
         DataRoot ->
             case get_data_dir(DataRoot, integer_to_list(Partition)) of
                 {ok, DataDir} ->
-                    case leveled_bookie:book_start(DataDir, 2000, 500000000) of
+                    case leveled_bookie:book_start(DataDir, 
+                                                    2000, 
+                                                    500000000, 
+                                                    riak_sync) of
                         {ok, Bookie} ->
                             Ref = make_ref(),
                             schedule_journalcompaction(Ref),
