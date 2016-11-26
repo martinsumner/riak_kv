@@ -81,6 +81,7 @@ start(Partition, Config) ->
     %% Get the data root directory
     case app_helper:get_prop_or_env(data_root, Config, leveled) of
         undefined ->
+            lager:info("Config ~w", [Config]),
             lager:error("Failed to create leveled dir: data_root is not set"),
             {error, data_root_unset};
         DataRoot ->
