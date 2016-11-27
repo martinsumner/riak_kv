@@ -23,7 +23,7 @@
          start/2,
          stop/1,
          get/3,
-         get_object/3,
+         get_object/4,
          put/5,
          put_object/5,
          delete/4,
@@ -132,19 +132,26 @@ get(Bucket, Key, #state{bookie=Bookie}=State) ->
     end.
 
 %% @doc Retrieve an object from the leveled backend
--spec get_object(riak_object:bucket(), riak_object:key(), state()) ->
+-spec get_object(riak_object:bucket(), riak_object:key(), boolean(), state()) ->
                  {ok, any(), state()} |
                  {ok, not_found, state()} |
                  {error, term(), state()}.
-get_object(Bucket, Key, #state{bookie=Bookie}=State) ->
+get_object(Bucket, Key, WantsBinary, #state{bookie=Bookie}=State) ->
     case leveled_bookie:book_get(Bookie, Bucket, Key, ?RIAK_TAG) of
         {ok, Value} ->
-            {ok, Value, State};
+            case WantsBinary of 
+                true ->
+                    {ok, term_to_binary(Value), State};
+                false ->
+                    {ok, Value, State}
+            end;
         not_found  ->
             {error, not_found, State};
         {error, Reason} ->
             {error, Reason, State}
-    end.
+    end;
+
+
 
 %% @doc Insert an object into the leveled backend.
 -type index_spec() :: {add, Index, SecondaryKey} |
