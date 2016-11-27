@@ -42,7 +42,12 @@
 -endif.
 
 -define(RIAK_TAG, o_rkv).
--define(CAPABILITIES, [async_fold, indexes, head, hash_query, putfsm_pause]).
+-define(CAPABILITIES, [async_fold, 
+                        indexes, 
+                        uses_r_object, 
+                        head, 
+                        hash_query, 
+                        putfsm_pause]).
 -define(API_VERSION, 1).
 -define(JC_CHECK_INTERVAL, timer:minutes(10)).
 -define(JC_CHECK_JITTER, 0.3).
