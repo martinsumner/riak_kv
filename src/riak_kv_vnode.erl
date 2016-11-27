@@ -2359,6 +2359,8 @@ encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
 
 uses_r_object(Mod, ModState, Bucket) ->
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
+    lager:info("Capability check uses_r_object ~w", 
+                [lists:member(uses_r_object, Capabilities)]),
     lists:member(uses_r_object, Capabilities).
 
 sanitize_bkey({{<<"default">>, B}, K}) ->
