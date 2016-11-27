@@ -149,8 +149,7 @@ get_object(Bucket, Key, WantsBinary, #state{bookie=Bookie}=State) ->
             {error, not_found, State};
         {error, Reason} ->
             {error, Reason, State}
-    end;
-
+    end.
 
 
 %% @doc Insert an object into the leveled backend.
