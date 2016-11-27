@@ -24,7 +24,7 @@
          stop/1,
          get/3,
          get_object/3,
-         put/3,
+         put/5,
          put_object/5,
          delete/4,
          drop/1,
