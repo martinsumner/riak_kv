@@ -23,9 +23,7 @@
          start/2,
          stop/1,
          get/3,
-         get_object/4,
          put/5,
-         put_object/5,
          delete/4,
          drop/1,
          fold_buckets/4,
@@ -45,8 +43,7 @@
 
 -define(RIAK_TAG, o_rkv).
 -define(CAPABILITIES, [async_fold, 
-                        indexes, 
-                        uses_r_object, 
+                        indexes,
                         head, 
                         hash_query, 
                         putfsm_pause]).
@@ -131,26 +128,6 @@ get(Bucket, Key, #state{bookie=Bookie}=State) ->
             {error, Reason, State}
     end.
 
-%% @doc Retrieve an object from the leveled backend
--spec get_object(riak_object:bucket(), riak_object:key(), boolean(), state()) ->
-                 {ok, any(), state()} |
-                 {ok, not_found, state()} |
-                 {error, term(), state()}.
-get_object(Bucket, Key, WantsBinary, #state{bookie=Bookie}=State) ->
-    case leveled_bookie:book_get(Bookie, Bucket, Key, ?RIAK_TAG) of
-        {ok, Value} ->
-            case WantsBinary of 
-                true ->
-                    {ok, term_to_binary(Value), State};
-                false ->
-                    {ok, Value, State}
-            end;
-        not_found  ->
-            {error, not_found, State};
-        {error, Reason} ->
-            {error, Reason, State}
-    end.
-
 
 %% @doc Insert an object into the leveled backend.
 -type index_spec() :: {add, Index, SecondaryKey} |
@@ -164,24 +141,6 @@ get_object(Bucket, Key, WantsBinary, #state{bookie=Bookie}=State) ->
                          {ok, state()} |
                          {error, term(), state()}.
 put(Bucket, Key, IndexSpecs, Val, #state{bookie=Bookie}=State) ->
-    case leveled_bookie:book_put(Bookie,
-                                    Bucket, Key, Val, IndexSpecs,
-                                    ?RIAK_TAG) of
-        ok ->
-            {ok, State};
-        pause ->
-            % To be changed if back-pressure added to Riak put_fsm
-            {ok, State}
-    end.
-
--spec put_object(riak_object:bucket(),
-                    riak_object:key(),
-                    [index_spec()],
-                    riak_object:r_object(),
-                    state()) ->
-                         {ok, state()} |
-                         {error, term(), state()}.
-put_object(Bucket, Key, IndexSpecs, Val, #state{bookie=Bookie}=State) ->
     case leveled_bookie:book_put(Bookie,
                                     Bucket, Key, Val, IndexSpecs,
                                     ?RIAK_TAG) of
