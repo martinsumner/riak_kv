@@ -199,15 +199,14 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
     {async, Folder} =
         if
             Index /= false  ->
-                lager:info("Index ~w", [Index]),
-                {index, Bucket, ?KV_INDEX_Q{filter_field=Field,
+                {index, QBucket, ?KV_INDEX_Q{filter_field=Field,
                                                 start_key=StartKey,
                                                 start_term=StartTerm,
                                                 end_term=EndTerm,
                                                 return_terms=ReturnTerms,
                                                 term_regex=TermRegex}} = Index,
                 IndexQuery = {index_query,
-                                {Bucket, StartKey},
+                                {QBucket, StartKey},
                                 {FoldKeysFun, Acc},
                                 {Field, StartTerm, EndTerm},
                                 {ReturnTerms, TermRegex}},
