@@ -35,7 +35,7 @@
          callback/3]).
 
 
--include("include/riak_kv_index.hrl").
+-include("riak_kv_index.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -199,6 +199,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
     {async, Folder} =
         if
             Index /= false  ->
+                lager:info("Index ~w", Index),
                 {index, Bucket, ?KV_INDEX_Q{filter_field=Field,
                                                 start_key=StartKey,
                                                 start_term=StartTerm,
