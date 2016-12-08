@@ -292,10 +292,13 @@ data_size(_State) ->
 -spec callback(reference(), any(), state()) -> {ok, state()}.
 callback(Ref,
          compact_journal,
-         #state{reference=Ref,
-                bookie=Bookie}=State) when is_reference(Ref) ->
+         #state{reference=Ref, bookie=Bookie}=State) when is_reference(Ref) ->
     prompt_journalcompaction(Bookie, Ref),
-    {ok, State}.
+    {ok, State};
+callback(Ref, Callback, _State) ->
+    true = is_reference(Ref),
+    lager:info("Unknown callback ~w", [Callback]),
+    error. 
 
 %% ===================================================================
 %% Internal functions
