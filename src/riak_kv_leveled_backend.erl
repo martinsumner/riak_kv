@@ -290,14 +290,14 @@ data_size(_State) ->
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
-callback(Ref,
-         compact_journal,
-         #state{reference=Ref, bookie=Bookie}=State) when is_reference(Ref) ->
-    prompt_journalcompaction(Bookie, Ref),
-    {ok, State};
+callback(Ref, compact_journal, State) ->
+    case is_reference(Ref) of 
+        true ->
+             prompt_journalcompaction(State#state.bookie, Ref),
+             {ok, State}
+    end;
 callback(Ref, Callback, _State) ->
-    true = is_reference(Ref),
-    lager:info("Unknown callback ~w", [Callback]),
+    lager:info("Unknown callback ~w for Reference ~w", [Callback, Ref]),
     error. 
 
 %% ===================================================================
