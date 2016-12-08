@@ -88,7 +88,7 @@ start(Partition, Config) ->
         {ok, DataDir} ->
             case leveled_bookie:book_start(DataDir, 
                                             2000, 
-                                            500000000, 
+                                            100000000, 
                                             riak_sync) of
                 {ok, Bookie} ->
                     Ref = make_ref(),
@@ -288,7 +288,6 @@ data_size(_State) ->
     undefined.
 
 
-
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
 callback(Ref, compact_journal, State) ->
@@ -296,10 +295,7 @@ callback(Ref, compact_journal, State) ->
         true ->
              prompt_journalcompaction(State#state.bookie, Ref),
              {ok, State}
-    end;
-callback(Ref, Callback, _State) ->
-    lager:info("Unknown callback ~w for Reference ~w", [Callback, Ref]),
-    error. 
+    end. 
 
 %% ===================================================================
 %% Internal functions
