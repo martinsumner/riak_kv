@@ -288,6 +288,7 @@ data_size(_State) ->
     undefined.
 
 
+
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
 callback(Ref, compact_journal, State) ->
