@@ -291,7 +291,7 @@ data_size(_State) ->
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
 callback(Ref,
-         merge_check,
+         compact_journal,
          #state{reference=Ref,
                 bookie=Bookie}=State) when is_reference(Ref) ->
     prompt_journalcompaction(Bookie, Ref),
