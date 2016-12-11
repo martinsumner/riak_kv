@@ -87,7 +87,7 @@ start(Partition, Config) ->
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
             case leveled_bookie:book_start(DataDir, 
-                                            2500, 
+                                            3600, 
                                             400000000, 
                                             riak_sync) of
                 {ok, Bookie} ->
