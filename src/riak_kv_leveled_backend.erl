@@ -87,8 +87,8 @@ start(Partition, Config) ->
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
             case leveled_bookie:book_start(DataDir, 
-                                            3600, 
-                                            400000000, 
+                                            3000, 
+                                            300000000, 
                                             riak_sync) of
                 {ok, Bookie} ->
                     Ref = make_ref(),
