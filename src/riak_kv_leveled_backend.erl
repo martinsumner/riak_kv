@@ -88,7 +88,7 @@ start(Partition, Config) ->
         {ok, DataDir} ->
             case leveled_bookie:book_start(DataDir, 
                                             2000, 
-                                            500000000, 
+                                            1000000000, 
                                             riak_sync) of
                 {ok, Bookie} ->
                     Ref = make_ref(),
