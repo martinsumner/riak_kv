@@ -5,7 +5,6 @@ rebar.lock
 deps/*
 priv/*
 *.o
-include/*_pb.hrl
 *.beam
 doc
 test.*-temp-data
