@@ -83,7 +83,7 @@ capabilities(_, _) ->
 -spec start(integer(), list()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
     %% Get the data root directory
-    DataRoot = "./data/leveled",
+    DataRoot = "/data/leveled",
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
             case leveled_bookie:book_start(DataDir, 
