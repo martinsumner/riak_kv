@@ -89,7 +89,7 @@ start(Partition, Config) ->
             case leveled_bookie:book_start(DataDir, 
                                             2000, 
                                             500000000, 
-                                            riak_sync) of
+                                            nif_sync) of
                 {ok, Bookie} ->
                     Ref = make_ref(),
                     schedule_journalcompaction(Ref),
