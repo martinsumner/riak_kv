@@ -50,7 +50,7 @@
 -define(API_VERSION, 1).
 -define(JC_CHECK_INTERVAL, timer:minutes(10)).
 -define(JC_CHECK_JITTER, 0.3).
--define(JC_VALID_HOURS, [2, 3, 4]).
+-define(JC_VALID_HOURS, [6]).
 
 -record(state, {bookie :: pid(),
                 reference :: reference(),
