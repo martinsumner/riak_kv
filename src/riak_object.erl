@@ -995,6 +995,8 @@ sib_of_binary(<<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, Met
     MD = dict:from_list(MDList),
     {#r_content{metadata=MD, value=decode_maybe_binary(ValBin)}, Rest}.
 
+val_encoding_meta(<<>>, MDList) ->
+    MDList;
 val_encoding_meta(<<0, _Rest/binary>>, MDList) ->
     MDList;
 val_encoding_meta(<<1, _Rest/binary>>, MDList) ->
@@ -1257,12 +1259,29 @@ val_decoding_headresponse_test() ->
     % head_only
     B = <<"buckets are binaries">>,
     K = <<"keys are binaries">>,
-    V = <<>>,
+    V = <<"Some value">>,
     InObject = riak_object:new(B, K, V,
                                 dict:from_list([{?MD_VAL_ENCODING, 2},
                                 {<<"X-Foo_MetaData">>, "Foo"}])),
     Binary = to_binary(v1, InObject),
-    OutObject = from_binary(Binary),
+    <<?MAGIC:8/integer, 
+        ?V1_VERS:8/integer, 
+        VclockLen:32/integer, 
+        _VclockBin:VclockLen/binary, 
+        _SibCount:32/integer, SibsBin/binary>> = Binary,
+    <<ValLen:32/integer, 
+        _ValBin:ValLen/binary, 
+        MetaLen:32/integer, 
+        MetaBinRest:MetaLen/binary>> = SibsBin,
+    SibsBin0 = <<0:32/integer, 
+                    MetaLen:32/integer, 
+                    MetaBinRest:MetaLen/binary>>,
+    HeadBin = <<?MAGIC:8/integer, 
+                ?V1_VERS:8/integer, 
+                VclockLen:32/integer, 
+                _VclockBin:VclockLen/binary, 
+                _SibCount:32/integer, SibsBin0/binary>>,
+    OutObject = from_binary(B, K, HeadBin),
     C0 = lists:nth(1, OutObject#r_object.contents),
     ?assertMatch(head_only, C0#r_content.value).
 

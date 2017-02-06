@@ -1786,8 +1786,8 @@ do_get(_Sender, BKey, ReqID,
 %% @private
 do_head(_Sender, BKey, ReqID,
        State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
-    {Retval, ModState1} = do_head_term(BKey, Mod, ModState),
-    {reply, {r, RetVal, Idx, ReqID}, state#state{modstate=ModState1}.
+    {RetVal, ModState1} = do_head_term(BKey, Mod, ModState),
+    {reply, {r, RetVal, Idx, ReqID}, State#state{modstate=ModState1}}.
     
 %% @private
 -spec do_get_term({binary(), binary()}, atom(), tuple()) ->
@@ -1815,7 +1815,7 @@ do_get_term({Bucket, Key}, Mod, ModState) ->
                          {{error, notfound}, tuple()} |
                          {{error, any()}, tuple()}.
 do_head_term({Bucket, Key}, Mod, ModState) ->
-    case do_get_object(Bucket, Key, Mod, ModState, do_head_binary/4) of
+    case do_get_object(Bucket, Key, Mod, ModState, fun do_head_binary/4) of
         {ok, Obj, UpdModState} ->
             {{ok, Obj}, UpdModState};
         %% @TODO Eventually it would be good to
@@ -1841,7 +1841,7 @@ do_head_binary(Bucket, Key, Mod, ModState) ->
     Mod:head(Bucket, Key, ModState).
 
 do_get_object(Bucket, Key, Mod, ModState) ->
-    do_get_object(Bucket, Key, Mod, ModState, do_get_binary/4).
+    do_get_object(Bucket, Key, Mod, ModState, fun do_get_binary/4).
 
 do_get_object(Bucket, Key, Mod, ModState, BinFetchFun) ->
     case uses_r_object(Mod, ModState, Bucket) of
