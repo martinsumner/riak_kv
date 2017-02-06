@@ -1106,6 +1106,8 @@ determine_binary_type(Val, Meta) when is_binary(Val) ->
 determine_binary_type(_Val, Meta) ->
     {0, Meta}.
 
+decode_maybe_binary(<<>>) ->
+    head_only;
 decode_maybe_binary(<<1, Bin/binary>>) ->
     Bin;
 decode_maybe_binary(<<0, Bin/binary>>) ->
@@ -1249,6 +1251,20 @@ get_binary_type_tag_and_metadata_from_full_binary(Binary) ->
     <<_LMMega:32/integer, _LMSecs:32/integer, _LMMicro:32/integer, VTagLen:8/integer, _VTag:VTagLen/binary, _Deleted:1/binary-unit:8, MetaBin/binary>> = MetaBinRest,
     <<FirstBinaryByte:8, _Rest/binary>> = ValBin,
     {FirstBinaryByte, dict:from_list(meta_of_binary(MetaBin, []))}.
+
+val_decoding_headresponse_test() ->
+    % An empty binary as a value results in the content value being marked as
+    % head_only
+    B = <<"buckets are binaries">>,
+    K = <<"keys are binaries">>,
+    V = <<>>,
+    InObject = riak_object:new(B, K, V,
+                                dict:from_list([{?MD_VAL_ENCODING, 2},
+                                {<<"X-Foo_MetaData">>, "Foo"}])),
+    Binary = to_binary(v1, InObject),
+    OutObject = from_binary(Binary),
+    C0 = lists:nth(1, OutObject#r_object.contents),
+    ?assertMatch(head_only, C0#r_content.value).
 
 update_test() ->
     O = object_test(),
@@ -1597,5 +1613,6 @@ verify_contents([], []) ->
 verify_contents([{MD, V} | Rest], [{{Actor, Count}, V} | Rest2]) ->
     ?assertMatch({Actor, {Count, _}}, dict:fetch(?DOT, MD)),
     verify_contents(Rest, Rest2).
+
 
 -endif.

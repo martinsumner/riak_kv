@@ -24,6 +24,7 @@
 %% API
 -export([new_put_request/5,
          new_get_request/2,
+         new_head_request/2,
          new_w1c_put_request/3,
          new_listkeys_request/3,
          new_listbuckets_request/1,
@@ -51,6 +52,7 @@
 
 -export_type([put_request/0,
               get_request/0,
+              head_request/0,
               w1c_put_request/0,
               listkeys_request/0,
               listbuckets_request/0,
@@ -82,6 +84,10 @@
           options :: request_options()}).
 
 -record(riak_kv_get_req_v1, {
+          bkey :: bucket_key(),
+          req_id :: request_id()}).
+
+-record(riak_kv_head_req_v1, {
           bkey :: bucket_key(),
           req_id :: request_id()}).
 
@@ -132,6 +138,7 @@
 
 -opaque put_request() :: #riak_kv_put_req_v1{}.
 -opaque get_request() :: #riak_kv_get_req_v1{}.
+-opaque head_request() :: #riak_kv_head_req_v1{}.
 -opaque w1c_put_request() :: #riak_kv_w1c_put_req_v1{}.
 -opaque listbuckets_request() :: #riak_kv_listbuckets_req_v1{}.
 -opaque listkeys_request() :: #riak_kv_listkeys_req_v3{} | #riak_kv_listkeys_req_v4{}.
@@ -144,6 +151,7 @@
 
 -type request() :: put_request()
                  | get_request()
+                 | head_request()
                  | w1c_put_request()
                  | listkeys_request()
                  | listbuckets_request()
@@ -155,6 +163,7 @@
 
 -type request_type() :: kv_put_request
                       | kv_get_request
+                      | kv_head_request
                       | kv_w1c_put_request
                       | kv_listkeys_request
                       | kv_listbuckets_request
@@ -168,6 +177,7 @@
 -spec request_type(request()) -> request_type().
 request_type(#riak_kv_put_req_v1{}) -> kv_put_request;
 request_type(#riak_kv_get_req_v1{}) -> kv_get_request;
+request_type(#riak_kv_head_req_v1{}) -> kv_head_request;
 request_type(#riak_kv_w1c_put_req_v1{}) -> kv_w1c_put_request;
 request_type(#riak_kv_listkeys_req_v3{})-> kv_listkeys_request;
 request_type(#riak_kv_listkeys_req_v4{})-> kv_listkeys_request;
@@ -195,6 +205,10 @@ new_put_request(BKey, Object, ReqId, StartTime, Options) ->
 -spec new_get_request(bucket_key(), request_id()) -> get_request().
 new_get_request(BKey, ReqId) ->
     #riak_kv_get_req_v1{bkey = BKey, req_id = ReqId}.
+
+-spec new_head_request(bucket_key(), request_id()) -> head_request().
+new_head_request(BKey, ReqId) ->
+    #riak_kv_head_req_v1{bkey = BKey, req_id = ReqId}.
 
 -spec new_w1c_put_request(bucket_key(), encoded_obj(), replica_type()) -> w1c_put_request().
 new_w1c_put_request(BKey, EncodedObj, ReplicaType) ->
@@ -247,6 +261,8 @@ is_coordinated_put(#riak_kv_put_req_v1{options=Options}) ->
     proplists:get_value(coord, Options, false).
 
 get_bucket_key(#riak_kv_get_req_v1{bkey = BKey}) ->
+    BKey;
+get_bucket_key(#riak_kv_head_req_v1{bkey = BKey}) ->
     BKey;
 get_bucket_key(#riak_kv_put_req_v1{bkey = BKey}) ->
     BKey;
@@ -313,6 +329,8 @@ get_replica_type(#riak_kv_w1c_put_req_v1{type = Type}) ->
 get_request_id(#riak_kv_put_req_v1{req_id = ReqId}) ->
     ReqId;
 get_request_id(#riak_kv_get_req_v1{req_id = ReqId}) ->
+    ReqId;
+get_request_id(#riak_kv_head_req_v1{req_id = ReqId}) ->
     ReqId.
 
 get_start_time(#riak_kv_put_req_v1{start_time = StartTime}) ->

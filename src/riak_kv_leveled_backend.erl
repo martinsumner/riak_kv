@@ -23,6 +23,7 @@
          start/2,
          stop/1,
          get/3,
+         head/3,
          put/5,
          delete/4,
          drop/1,
@@ -128,6 +129,20 @@ get(Bucket, Key, #state{bookie=Bookie}=State) ->
             {error, Reason, State}
     end.
 
+%% @doc Retrieve an object from the leveled backend as a binary
+-spec head(riak_object:bucket(), riak_object:key(), state()) ->
+                 {ok, any(), state()} |
+                 {ok, not_found, state()} |
+                 {error, term(), state()}.
+head(Bucket, Key, #state{bookie=Bookie}=State) ->
+    case leveled_bookie:book_head(Bookie, Bucket, Key, ?RIAK_TAG) of
+        {ok, Value} ->
+            {ok, Value, State};
+        not_found  ->
+            {error, not_found, State};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
 
 %% @doc Insert an object into the leveled backend.
 -type index_spec() :: {add, Index, SecondaryKey} |

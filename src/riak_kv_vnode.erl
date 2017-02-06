@@ -530,6 +530,9 @@ handle_overload_request(kv_put_request, _Req, Sender, Idx) ->
 handle_overload_request(kv_get_request, Req, Sender, Idx) ->
     ReqId = riak_kv_requests:get_request_id(Req),
     riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqId});
+handle_overload_request(kv_head_request, Req, Sender, Idx) ->
+    ReqId = riak_kv_requests:get_request_id(Req),
+    riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqId});
 handle_overload_request(kv_w1c_put_request, Req, Sender, _Idx) ->
     Type = riak_kv_requests:get_replica_type(Req),
     riak_core_vnode:reply(Sender, ?KV_W1C_PUT_REPLY{reply={error, overload}, type=Type});
@@ -846,6 +849,19 @@ handle_request(kv_get_request, Req, Sender, State) ->
     BKey = riak_kv_requests:get_bucket_key(Req),
     ReqId = riak_kv_requests:get_request_id(Req),
     do_get(Sender, BKey, ReqId, State);
+handle_request(kv_head_request, Req, Sender, State) ->
+    BKey = riak_kv_requests:get_bucket_key(Req),
+    ReqId = riak_kv_requests:get_request_id(Req),
+    Mod = State#state.mod,
+    ModState = State#state.modstate,
+    {ok, Capabilities} = Mod:capabilities(ModState),
+    case maybe_support_head_requests(Capabilities) of
+        true ->
+            do_head(Sender, BKey, ReqId, State);
+        _ ->
+            do_get(Sender, BKey, ReqId, State)
+    end;
+    
 %% NB. The following two function clauses discriminate on the async_put State field
 handle_request(kv_w1c_put_request, Req, Sender, State=#state{async_put=true}) ->
     {Bucket, Key} = riak_kv_requests:get_bucket_key(Req),
@@ -1768,12 +1784,38 @@ do_get(_Sender, BKey, ReqID,
     {reply, {r, Retval, Idx, ReqID}, State#state{modstate=ModState1}}.
 
 %% @private
+do_head(_Sender, BKey, ReqID,
+       State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
+    {Retval, ModState1} = do_head_term(BKey, Mod, ModState),
+    {reply, {r, RetVal, Idx, ReqID}, state#state{modstate=ModState1}.
+    
+%% @private
 -spec do_get_term({binary(), binary()}, atom(), tuple()) ->
                          {{ok, riak_object:riak_object()}, tuple()} |
                          {{error, notfound}, tuple()} |
                          {{error, any()}, tuple()}.
 do_get_term({Bucket, Key}, Mod, ModState) ->
     case do_get_object(Bucket, Key, Mod, ModState) of
+        {ok, Obj, UpdModState} ->
+            {{ok, Obj}, UpdModState};
+        %% @TODO Eventually it would be good to
+        %% make the use of not_found or notfound
+        %% consistent throughout the code.
+        {error, not_found, UpdModState} ->
+            {{error, notfound}, UpdModState};
+        {error, Reason, UpdModState} ->
+            {{error, Reason}, UpdModState};
+        Err ->
+            Err
+    end.
+
+%% @private
+-spec do_head_term({binary(), binary()}, atom(), tuple()) ->
+                         {{ok, riak_object:riak_object()}, tuple()} |
+                         {{error, notfound}, tuple()} |
+                         {{error, any()}, tuple()}.
+do_head_term({Bucket, Key}, Mod, ModState) ->
+    case do_get_object(Bucket, Key, Mod, ModState, do_head_binary/4) of
         {ok, Obj, UpdModState} ->
             {{ok, Obj}, UpdModState};
         %% @TODO Eventually it would be good to
@@ -1795,13 +1837,19 @@ do_get_binary(Bucket, Key, Mod, ModState) ->
             Mod:get(Bucket, Key, ModState)
     end.
 
+do_head_binary(Bucket, Key, Mod, ModState) ->
+    Mod:head(Bucket, Key, ModState).
+
 do_get_object(Bucket, Key, Mod, ModState) ->
+    do_get_object(Bucket, Key, Mod, ModState, do_get_binary/4).
+
+do_get_object(Bucket, Key, Mod, ModState, BinFetchFun) ->
     case uses_r_object(Mod, ModState, Bucket) of
         true ->
             %% Non binary returns do not trigger size warnings
             Mod:get_object(Bucket, Key, false, ModState);
         false ->
-            case do_get_binary(Bucket, Key, Mod, ModState) of
+            case BinFetchFun(Bucket, Key, Mod, ModState) of
                 {ok, ObjBin, _UpdModState} ->
                     BinSize = size(ObjBin),
                     WarnSize = app_helper:get_env(riak_kv, warn_object_size),
@@ -2051,6 +2099,10 @@ maybe_enable_iterator_refresh(Capabilities, Opts) ->
         false ->
             lists:keydelete(iterator_refresh, 1, Opts)
     end.
+
+%% @private
+maybe_support_head_requests(Capabilities) ->
+    lists:member(head, Capabilities).
 
 %% @private
 do_get_vclocks(KeyList,_State=#state{mod=Mod,modstate=ModState}) ->
