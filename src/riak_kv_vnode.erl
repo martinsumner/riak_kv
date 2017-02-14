@@ -28,6 +28,8 @@
          start_vnodes/1,
          get/3,
          get/4,
+         head/3,
+         head/4,
          del/3,
          put/6,
          local_get/2,
@@ -263,6 +265,18 @@ get(Preflist, BKey, ReqId) ->
 
 get(Preflist, BKey, ReqId, Sender) ->
     Req = riak_kv_requests:new_get_request(sanitize_bkey(BKey), ReqId),
+    riak_core_vnode_master:command(Preflist,
+                                   Req,
+                                   Sender,
+                                   riak_kv_vnode_master).
+
+head(Preflist, BKey, ReqId) ->
+    %% Assuming this function is called from a FSM process
+    %% so self() == FSM pid
+    head(Preflist, BKey, ReqId, {fsm, undefined, self()}).
+
+head(Preflist, BKey, ReqId, Sender) ->
+    Req = riak_kv_requests:new_head_request(sanitize_bkey(BKey), ReqId),
     riak_core_vnode_master:command(Preflist,
                                    Req,
                                    Sender,

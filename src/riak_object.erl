@@ -80,7 +80,7 @@
                          %% Shanley's(11) + Joe's(42)
 -define(EMPTY_VTAG_BIN, <<"e">>).
 
--export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
+-export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2, remove_dominated/1]).
 -export([increment_vclock/2, increment_vclock/3, prune_vclock/3, vclock_descends/2, all_actors/1]).
 -export([actor_counter/2]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
@@ -98,6 +98,7 @@
 -export([is_robject/1]).
 -export([update_last_modified/1, update_last_modified/2]).
 -export([strict_descendant/2]).
+-export([find_bestobject/1)]).
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
@@ -214,13 +215,76 @@ reconcile(Objects, AllowMultiple) ->
             RObj
     end.
 
-%% @private remove all Objects from the list that are causally
+%% @doc remove all Objects from the list that are causally
 %% dominated by any other object in the list. Only concurrent /
 %% conflicting objects will remain.
 remove_dominated(Objects) ->
     All = sets:from_list(Objects),
     Del = sets:from_list(ancestors(Objects)),
     sets:to_list(sets:subtract(All, Del)).
+
+%% @doc Take a list of {Idx, Object} tuples that have been the result of HEAD
+%% requests (which may return full objects if the backend only supports GET
+%% requests).  From this list need to find only non-dominated unequal objects
+%% as the will need to be fetched.
+%%
+%% Will hope that the last object is the best, as this was the first received
+%%
+%% The response is either:
+%% {use, Idx, Obj} - use this object
+%% {fetch, Idx, Clock} - fetch object from this node
+%% fetch_all - fetch all objects
+
+find_bestobject(FetchedItems) ->
+    {TailIdx, TailObject} = lists:last(FetchedItems),
+    FoldFun =
+        fun({Idx, Obj}, {BestObj, IsSibling, BestIdx}) ->
+            case IsSibling of
+                {null, true, null} ->
+                    % If there are siblings could be smart about only fetching
+                    % conflicting objects. Will be lazy, though - fetch and
+                    % merge everything if it is a sibling
+                    {null, true, null};
+                false ->
+                    case vclock:descends(vclock(BestObj), vclock(Obj)) of
+                        true ->
+                            {BestObj, false, BestIdx};
+                        false ->                    
+                            case vclock:descends(vclock(Obj), vclock(BestObj)) of
+                                true ->
+                                    {Obj, false, Idx};
+                                false ->
+                                    {null, true, null}
+                            end
+                    end
+            end
+        end,
+    
+    case lists:foldr(FoldFun,
+                        {TailObject, false, TailIdx},
+                        FetchedItems) of
+        {null, true, null} ->
+            fetch_all;
+        {BestObj, false, BestIdx} ->
+            case is_head(BestObj) of
+                false ->
+                    {use, BestIdx, BestObj};
+                true ->
+                    {fetch, BestIdx, vclock(BestObj)}
+            end
+    end.
+                            
+
+%% @private Check if an object is simply a head response
+
+is_head(Obj)
+    C0 = lists:nth(1, Obj#r_object.contents),
+    case C0#r_content.value of
+        head_only ->
+            true;
+        _ ->
+            false
+    end.
 
 %% @private pairwise merge the objects in the list so that a single,
 %% merged riak_object remains that contains all sibling values. Only
@@ -1254,21 +1318,16 @@ get_binary_type_tag_and_metadata_from_full_binary(Binary) ->
     <<FirstBinaryByte:8, _Rest/binary>> = ValBin,
     {FirstBinaryByte, dict:from_list(meta_of_binary(MetaBin, []))}.
 
-val_decoding_headresponse_test() ->
-    % An empty binary as a value results in the content value being marked as
-    % head_only
-    B = <<"buckets are binaries">>,
-    K = <<"keys are binaries">>,
-    V = <<"Some value">>,
-    InObject = riak_object:new(B, K, V,
-                                dict:from_list([{?MD_VAL_ENCODING, 2},
-                                {<<"X-Foo_MetaData">>, "Foo"}])),
-    Binary = to_binary(v1, InObject),
+
+convert_object_to_headonly(Object) ->
+    % Use in unit tests to simulate an object returned as a result of a HEAD
+    % request
+    Binary = to_binary(v1, Object),
     <<?MAGIC:8/integer, 
         ?V1_VERS:8/integer, 
         VclockLen:32/integer, 
-        _VclockBin:VclockLen/binary, 
-        _SibCount:32/integer, SibsBin/binary>> = Binary,
+        VclockBin:VclockLen/binary, 
+        SibCount:32/integer, SibsBin/binary>> = Binary,
     <<ValLen:32/integer, 
         _ValBin:ValLen/binary, 
         MetaLen:32/integer, 
@@ -1279,11 +1338,68 @@ val_decoding_headresponse_test() ->
     HeadBin = <<?MAGIC:8/integer, 
                 ?V1_VERS:8/integer, 
                 VclockLen:32/integer, 
-                _VclockBin:VclockLen/binary, 
-                _SibCount:32/integer, SibsBin0/binary>>,
-    OutObject = from_binary(B, K, HeadBin),
+                VclockBin:VclockLen/binary, 
+                SibCount:32/integer, SibsBin0/binary>>,
+    from_binary(B, K, HeadBin),
+
+val_decoding_headresponse_test() ->
+    % An empty binary as a value results in the content value being marked as
+    % head_only
+    B = <<"buckets are binaries">>,
+    K = <<"keys are binaries">>,
+    V = <<"Some value">>,
+    InObject = riak_object:new(B, K, V,
+                                dict:from_list([{?MD_VAL_ENCODING, 2},
+                                {<<"X-Foo_MetaData">>, "Foo"}])),
+    OutObject = convert_object_to_headonly(InObject),
     C0 = lists:nth(1, OutObject#r_object.contents),
     ?assertMatch(head_only, C0#r_content.value).
+
+find_bestobject_equal_test() ->
+    % three identical objects, but one is head_only
+    B = <<"buckets are binaries">>,
+    K = <<"keys are binaries">>,
+    V = <<"Some value">>,
+    InObject = riak_object:new(B, K, V,
+                                dict:from_list([{?MD_VAL_ENCODING, 2},
+                                {<<"X-Foo_MetaData">>, "Foo"}])),
+    Obj1 = InObject,
+    Obj2 = InObject,
+    Obj3 = convert_object_to_headonly(InObject),
+    % The response is either:
+    % {use, Idx, Obj} - use this object
+    % {fetch, Idx, Clock} - fetch object from this node
+    % fetch_all - fetch all objects
+    ?assertMatch({use, 1, _},
+                    find_bestobject([{3, Obj3}, {2, Obj2}, {1, Obj1}])),
+    % In an environment with mixed backends the below test demonstrates that
+    % current behaviour is sub-optimal, as a fetch here is unnecessary
+    ?assertMatch({fetch, 3, _},
+                    find_bestobject([{1, Obj3}, {2, Obj2}, {3, Obj1}])).
+
+find_bestobject_ancestor_test() ->
+    % one object is behind, and one of the dominant objects is head_only
+    {Obj1, Obj2} = ancestor(),
+    Obj3 = convert_object_to_headonly(Obj2),
+    ?assertMatch({use, 2, _},
+                    find_bestobject([{3, Obj3}, {2, Obj2}, {1, Obj1}]),
+    % In an environment with mixed backends the below test demonstrates that
+    % current behaviour is sub-optimal, as a fetch here is unnecessary
+    ?assertMatch({fetch, 3, _},
+                    find_bestobject([{2, Obj2}, {3, Obj3}, {1, Obj1}]).
+
+find_bestobject_reconcile_test() ->
+    Actor = self(),
+    {Obj1, UpdO} = update_test(),
+    Obj2 = riak_object:increment_vclock(UpdO, Actor),
+    Obj3 = riak_object:increment_vclock(UpdO, alt_pid),
+    Obj4 = convert_objet_to_headonly(Obj3),
+    ?assertMatch(fetch_all,
+                    find_bestobject([{1, Obj1}, {2, Obj2},
+                                        {3, Obj3}, {4, Obj4}])),
+    ?assertMatch(fetch_all,
+                    find_bestobject([{4, Obj4}, {2, Obj2},
+                                        {3, Obj3}, {1, Obj1}])).
 
 update_test() ->
     O = object_test(),
