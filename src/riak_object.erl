@@ -98,7 +98,7 @@
 -export([is_robject/1]).
 -export([update_last_modified/1, update_last_modified/2]).
 -export([strict_descendant/2]).
--export([find_bestobject/1)]).
+-export([find_bestobject/1]).
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
@@ -240,7 +240,7 @@ find_bestobject(FetchedItems) ->
     FoldFun =
         fun({Idx, Obj}, {BestObj, IsSibling, BestIdx}) ->
             case IsSibling of
-                {null, true, null} ->
+                true ->
                     % If there are siblings could be smart about only fetching
                     % conflicting objects. Will be lazy, though - fetch and
                     % merge everything if it is a sibling
@@ -277,7 +277,7 @@ find_bestobject(FetchedItems) ->
 
 %% @private Check if an object is simply a head response
 
-is_head(Obj)
+is_head(Obj) ->
     C0 = lists:nth(1, Obj#r_object.contents),
     case C0#r_content.value of
         head_only ->
@@ -1319,7 +1319,7 @@ get_binary_type_tag_and_metadata_from_full_binary(Binary) ->
     {FirstBinaryByte, dict:from_list(meta_of_binary(MetaBin, []))}.
 
 
-convert_object_to_headonly(Object) ->
+convert_object_to_headonly(B, K, Object) ->
     % Use in unit tests to simulate an object returned as a result of a HEAD
     % request
     Binary = to_binary(v1, Object),
@@ -1340,7 +1340,7 @@ convert_object_to_headonly(Object) ->
                 VclockLen:32/integer, 
                 VclockBin:VclockLen/binary, 
                 SibCount:32/integer, SibsBin0/binary>>,
-    from_binary(B, K, HeadBin),
+    from_binary(B, K, HeadBin).
 
 val_decoding_headresponse_test() ->
     % An empty binary as a value results in the content value being marked as
@@ -1351,7 +1351,7 @@ val_decoding_headresponse_test() ->
     InObject = riak_object:new(B, K, V,
                                 dict:from_list([{?MD_VAL_ENCODING, 2},
                                 {<<"X-Foo_MetaData">>, "Foo"}])),
-    OutObject = convert_object_to_headonly(InObject),
+    OutObject = convert_object_to_headonly(B, K, InObject),
     C0 = lists:nth(1, OutObject#r_object.contents),
     ?assertMatch(head_only, C0#r_content.value).
 
@@ -1365,7 +1365,8 @@ find_bestobject_equal_test() ->
                                 {<<"X-Foo_MetaData">>, "Foo"}])),
     Obj1 = InObject,
     Obj2 = InObject,
-    Obj3 = convert_object_to_headonly(InObject),
+    Obj3 = convert_object_to_headonly(B, K, InObject),
+    ?assertMatch(true, is_head(Obj3)),
     % The response is either:
     % {use, Idx, Obj} - use this object
     % {fetch, Idx, Clock} - fetch object from this node
@@ -1375,25 +1376,28 @@ find_bestobject_equal_test() ->
     % In an environment with mixed backends the below test demonstrates that
     % current behaviour is sub-optimal, as a fetch here is unnecessary
     ?assertMatch({fetch, 3, _},
-                    find_bestobject([{1, Obj3}, {2, Obj2}, {3, Obj1}])).
+                    find_bestobject([{1, Obj1}, {2, Obj2}, {3, Obj3}])).
 
-find_bestobject_ancestor_test() ->
+find_bestobject_ancestor() ->
     % one object is behind, and one of the dominant objects is head_only
+    B = <<"buckets_are_binaries">>,
+    K = <<"keys are binaries">>,
     {Obj1, Obj2} = ancestor(),
-    Obj3 = convert_object_to_headonly(Obj2),
+    Obj3 = convert_object_to_headonly(B, K, Obj2),
     ?assertMatch({use, 2, _},
-                    find_bestobject([{3, Obj3}, {2, Obj2}, {1, Obj1}]),
+                    find_bestobject([{3, Obj3}, {2, Obj2}, {1, Obj1}])),
     % In an environment with mixed backends the below test demonstrates that
     % current behaviour is sub-optimal, as a fetch here is unnecessary
     ?assertMatch({fetch, 3, _},
-                    find_bestobject([{2, Obj2}, {3, Obj3}, {1, Obj1}]).
+                    find_bestobject([{2, Obj2}, {3, Obj3}, {1, Obj1}])).
 
-find_bestobject_reconcile_test() ->
-    Actor = self(),
+find_bestobject_reconcile() ->
+    B = <<"buckets_are_binaries">>,
+    K = <<"keys are binaries">>,
     {Obj1, UpdO} = update_test(),
-    Obj2 = riak_object:increment_vclock(UpdO, Actor),
+    Obj2 = riak_object:increment_vclock(UpdO, one_pid),
     Obj3 = riak_object:increment_vclock(UpdO, alt_pid),
-    Obj4 = convert_objet_to_headonly(Obj3),
+    Obj4 = convert_object_to_headonly(B, K, Obj3),
     ?assertMatch(fetch_all,
                     find_bestobject([{1, Obj1}, {2, Obj2},
                                         {3, Obj3}, {4, Obj4}])),
@@ -1435,7 +1439,9 @@ bucket_prop_needers_test_() ->
       {"Dotted values reconcile", fun dotted_values_reconcile/0},
       {"Weird Clocks, Weird Dots", fun weird_clocks_weird_dots/0},
       {"Mixed Merge", fun mixed_merge/0},
-      {"Mixed Merge 2", fun mixed_merge2/0}]
+      {"Mixed Merge 2", fun mixed_merge2/0},
+        {"Find Object Ancestor", fun find_bestobject_ancestor/0},
+        {"Find Object Reconcile", fun find_bestobject_reconcile/0}]
     }.
 
 ancestor() ->
