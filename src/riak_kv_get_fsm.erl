@@ -326,14 +326,16 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
             _ ->
                 RequestType
         end,
-    StateDate = 
+    StateData = 
         case RequestType2 of
             head ->
                 riak_kv_vnode:head(Preflist, BKey, ReqId),
+                HO_GetCore = riak_kv_get_core:head_only(GetCore),
                 % Mark the get_core as head_only so that when determining the
                 % response in riak_get_core the specific head_merge function
                 % will be used
-                StateData0#state{tref=TRef, get_core = head_only(GetCore)};
+
+                StateData0#state{tref=TRef, get_core = HO_GetCore};
             get ->
                 riak_kv_vnode:get(Preflist, BKey, ReqId),
                 StateData0#state{tref=TRef}
@@ -352,8 +354,7 @@ preflist_for_tracing(Preflist) ->
 
 %% @private
 waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = GetCore,
-                                                                  trace = Trace,
-                                                                  bkey = BKey}) ->
+                                                                  trace = Trace}) ->
     case Trace of
         true ->
             ShortCode = riak_kv_get_core:result_shortcode(VnodeResult),

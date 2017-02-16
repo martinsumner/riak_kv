@@ -80,24 +80,24 @@ init(N, R, PR, FailThreshold, NotFoundOk, AllowMult, DeletedVClock, IdxType) ->
              idx_type = IdxType}.
 
 %% Re-initialise a get to a restricted number of vnodes (that must all respond)
--spec get_init(N::pos_integer(), get_core()) -> get_core().
+-spec get_init(N::pos_integer(), getcore()) -> getcore().
 get_init(N, PrevGetCore) ->
     #getcore{n = N,
                 r = N,
                 pr = 0,
                 fail_threshold = 0,
-                notfound_ok = PrevGetCore#get_core.notfound_ok,
-                allow_mult = PrevGetCore#get_core.allow_mult,
-                deletedvclock = PrevGetCore#get_core.deletedvclock,
-                idx_type = PrevGetCore#get_core.idx_type,
+                notfound_ok = PrevGetCore#getcore.notfound_ok,
+                allow_mult = PrevGetCore#getcore.allow_mult,
+                deletedvclock = PrevGetCore#getcore.deletedvclock,
+                idx_type = PrevGetCore#getcore.idx_type,
                 head_only = false}.       
 
 %% Convert the get so that it is expecting to potentially receive the
 %% responses to head requests (though for backwards compatibility these may
 %% actually still be get responses)
--spec head_only(get_core()) -> get_core().
+-spec head_only(getcore()) -> getcore().
 head_only(GetCore) ->
-    GetCore#get_core{head_only = true}.
+    GetCore#getcore{head_only = true}.
 
 %% Add a result for a vnode index
 -spec add_result(non_neg_integer(), result(), getcore()) -> getcore().
@@ -175,7 +175,7 @@ response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK} = GetCore)
         deletedvclock = DeletedVClock} = GetCore,
     Merged = head_merge(Results, AllowMult),
     case Merged of
-        {ok, MergedObj} ->
+        {ok, _MergedObj} ->
             {Merged, GetCore#getcore{merged = Merged}}; % {ok, MObj}
         {tombstone, MObj} when DeletedVClock ->
             {{error, {deleted, riak_object:vclock(MObj)}},
@@ -388,8 +388,7 @@ head_merge(Replies, AllowMult) ->
                         _ ->
                             {fetch, [Idx]}
                     end
-            end,
-            
+            end
     end.    
             
 
