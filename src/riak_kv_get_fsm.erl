@@ -30,7 +30,11 @@
 -export([start/6, start_link/6, start/4, start_link/4]).
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
--export([prepare/2,validate/2,execute/2,waiting_vnode_r/2,waiting_read_repair/2]).
+-export([prepare/2,
+            validate/2,
+            execute/2,
+            waiting_vnode_r/2,
+            waiting_read_repair/2]).
 
 -type detail() :: timing |
                   vnodes.
@@ -74,7 +78,9 @@
                 timing = [] :: [{atom(), erlang:timestamp()}],
                 calculated_timings :: {ResponseUSecs::non_neg_integer(),
                                        [{StateName::atom(), TimeUSecs::non_neg_integer()}]} | undefined,
-                crdt_op :: undefined | true
+                crdt_op :: undefined | true,
+                request_type :: undefined | head | get,
+                override_nodes = {false, []} :: {boolean() | list()}  
                }).
 
 -include("riak_kv_dtrace.hrl").
@@ -82,6 +88,7 @@
 -define(DEFAULT_TIMEOUT, 60000).
 -define(DEFAULT_R, default).
 -define(DEFAULT_PR, 0).
+-define(DEFAULT_RT, head).
 
 %% ===================================================================
 %% Public API
@@ -292,9 +299,18 @@ validate_quorum(_R, _ROpt, _N, _PR, _PROpt, _NumPrimaries, _NumVnodes) ->
 %% @private
 execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
                                    bkey=BKey, trace=Trace,
-                                   preflist2 = Preflist2}) ->
+                                   preflist2 = Preflist2,
+                                   get_core = GetCore,
+                                   request_type = RequestType,
+                                   override_nodes = OverNodes}) ->
     TRef = schedule_timeout(Timeout),
-    Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
+    Preflist =
+        case OverNodes of
+            {false, _} ->
+                [IndexNode || {IndexNode, _Type} <- Preflist2];
+            {true, IdxList} ->
+                IdxList
+        end,
     case Trace of
         true ->
             ?DTRACE(?C_GET_FSM_EXECUTE, [], ["execute"]),
@@ -303,8 +319,25 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
         _ ->
             ok
     end,
-    riak_kv_vnode:get(Preflist, BKey, ReqId),
-    StateData = StateData0#state{tref=TRef},
+    RequestType2 =
+        case RequestType of
+            undefined ->
+                ?DEFAULT_RT;
+            _ ->
+                RequestType
+        end,
+    StateDate = 
+        case RequestType2 of
+            head ->
+                riak_kv_vnode:head(Preflist, BKey, ReqId),
+                % Mark the get_core as head_only so that when determining the
+                % response in riak_get_core the specific head_merge function
+                % will be used
+                StateData0#state{tref=TRef, get_core = head_only(GetCore)};
+            get ->
+                riak_kv_vnode:get(Preflist, BKey, ReqId),
+                StateData0#state{tref=TRef}
+        end,
     new_state(waiting_vnode_r, StateData).
 
 %% @private calculate a concatenated preflist for tracing macro
@@ -319,7 +352,8 @@ preflist_for_tracing(Preflist) ->
 
 %% @private
 waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = GetCore,
-                                                                  trace=Trace}) ->
+                                                                  trace = Trace,
+                                                                  bkey = BKey}) ->
     case Trace of
         true ->
             ShortCode = riak_kv_get_core:result_shortcode(VnodeResult),
@@ -331,10 +365,30 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = Get
     UpdGetCore = riak_kv_get_core:add_result(Idx, VnodeResult, GetCore),
     case riak_kv_get_core:enough(UpdGetCore) of
         true ->
-            {Reply, UpdGetCore2} = riak_kv_get_core:response(UpdGetCore),
-            NewStateData = client_reply(Reply, StateData#state{get_core = UpdGetCore2}),
-            update_stats(Reply, NewStateData),
-            maybe_finalize(NewStateData);
+            case riak_kv_get_core:response(UpdGetCore) of
+                {fetch, IdxList} ->
+                    % Trigger genuine GETs to each vnode index required to
+                    % get a merged view of an object.  Hopefully should be
+                    % just one
+                    NewGC = riak_kv_get_core:get_init(length(IdxList),
+                                                        UpdGetCore),
+                    {next_state,
+                        execute,
+                        StateData#state{request_type = get,
+                                        override_nodes = {true, IdxList},
+                                        get_core = NewGC},
+                        0};
+                {fetch_all, _} ->
+                    {next_state,
+                        prepare,
+                        StateData#state{request_type = get},
+                        0};
+                {Reply, UpdGetCore2} ->
+                    StateWithReply = StateData#state{get_core = UpdGetCore2},
+                    NewStateData = client_reply(Reply, StateWithReply),
+                    update_stats(Reply, NewStateData),
+                    maybe_finalize(NewStateData)
+            end;
         false ->
             %% don't use new_state/2 since we do timing per state, not per message in state
             {next_state, waiting_vnode_r,  StateData#state{get_core = UpdGetCore}}

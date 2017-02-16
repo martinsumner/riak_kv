@@ -20,7 +20,7 @@
 %%
 %% -------------------------------------------------------------------
 -module(riak_kv_get_core).
--export([init/8, add_result/3, result_shortcode/1, enough/1, response/1,
+-export([init/8, get_init/2, head_only/1, add_result/3, result_shortcode/1, enough/1, response/1,
          has_all_results/1, final_action/1, info/1]).
 -export_type([getcore/0, result/0, reply/0, final_action/0]).
 
@@ -56,7 +56,8 @@
                   num_notfound = 0 :: non_neg_integer(),
                   num_deleted = 0 :: non_neg_integer(),
                   num_fail = 0 :: non_neg_integer(),
-                  idx_type :: idx_type()}).
+                  idx_type :: idx_type(),
+                  head_only = false :: boolean()}).
 -opaque getcore() :: #getcore{}.
 
 %% ====================================================================
@@ -77,6 +78,26 @@ init(N, R, PR, FailThreshold, NotFoundOk, AllowMult, DeletedVClock, IdxType) ->
              allow_mult = AllowMult,
              deletedvclock = DeletedVClock,
              idx_type = IdxType}.
+
+%% Re-initialise a get to a restricted number of vnodes (that must all respond)
+-spec get_init(N::pos_integer(), get_core()) -> get_core().
+get_init(N, PrevGetCore) ->
+    #getcore{n = N,
+                r = N,
+                pr = 0,
+                fail_threshold = 0,
+                notfound_ok = PrevGetCore#get_core.notfound_ok,
+                allow_mult = PrevGetCore#get_core.allow_mult,
+                deletedvclock = PrevGetCore#get_core.deletedvclock,
+                idx_type = PrevGetCore#get_core.idx_type,
+                head_only = false}.       
+
+%% Convert the get so that it is expecting to potentially receive the
+%% responses to head requests (though for backwards compatibility these may
+%% actually still be get responses)
+-spec head_only(get_core()) -> get_core().
+head_only(GetCore) ->
+    GetCore#get_core{head_only = true}.
 
 %% Add a result for a vnode index
 -spec add_result(non_neg_integer(), result(), getcore()) -> getcore().
@@ -132,9 +153,9 @@ enough(_) ->
 
 %% Get success/fail response once enough results received
 -spec response(getcore()) -> {reply(), getcore()}.
-%% Met quorum
-response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK} = GetCore)
-        when NumOK >= R andalso NumPOK >= PR ->
+%% Met quorum for a standard get request/response
+response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK, head_only = HO} = GetCore)
+        when NumOK >= R andalso NumPOK >= PR andalso HO == false ->
     #getcore{results = Results, allow_mult=AllowMult,
         deletedvclock = DeletedVClock} = GetCore,
     {ObjState, MObj} = Merged = merge(Results, AllowMult),
@@ -147,6 +168,28 @@ response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK} = GetCore)
             {error, notfound}
     end,
     {Reply, GetCore#getcore{merged = Merged}};
+%% Met quorum, but the request had asked only for head responses
+response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK} = GetCore)
+        when NumOK >= R andalso NumPOK >= PR ->
+    #getcore{results = Results, allow_mult=AllowMult,
+        deletedvclock = DeletedVClock} = GetCore,
+    Merged = head_merge(Results, AllowMult),
+    case Merged of
+        {ok, MergedObj} ->
+            {Merged, GetCore#getcore{merged = Merged}}; % {ok, MObj}
+        {tombstone, MObj} when DeletedVClock ->
+            {{error, {deleted, riak_object:vclock(MObj)}},
+                GetCore#getcore{merged = Merged}};
+        {fetch, IdxList} ->
+            % A list of vnode indexes to be fetched from using a GET request
+            {{fetch, IdxList}, GetCore};
+        {fetch_all, _} ->
+            % Trigger to go back to the start and re-initiate but forcing GETs
+            % not HEAD requests
+            {{fetch_all, null}, GetCore};
+        _ -> % tombstone or notfound or expired
+            {{error, notfound}, GetCore#getcore{merged = Merged}}
+    end;
 %% everything was either a tombstone or a notfound
 response(#getcore{num_notfound = NumNotFound, num_ok = NumOK,
         num_deleted = NumDel, num_fail = NumFail} = GetCore)
@@ -303,6 +346,54 @@ merge(Replies, AllowMult) ->
                     {ok, Merged}
             end
     end.
+
+%% @private - replaces the merge method when an initial HEAD request is used
+%% not a GET request.  The results returned will be either normal objects (if
+%% a backend not supporting HEAD was called), or body-less objects.
+%%
+%% The vector clocks need to be checked to see if there is any merge activity
+%% required.  If not, then a single GET is used to get the required object (or
+%% the object is used if it was not a response to a HEAD request).  If there
+%% is merge activity required, each object is fetched (if no body) is present
+%% and the legacy merge function is applied.
+head_merge(Replies, AllowMult) ->
+    % Replies should be a list of [{Idx, {ok, RObj}]
+    IdxObjs = [{I, {ok, RObj}} || {I, {ok, RObj}} <- Replies],
+    % Those that don't pattern match will be not_found
+    case IdxObjs of
+        [] ->
+            {notfound, undefined};
+        _ ->
+            case riak_object:find_bestobject(IdxObjs) of
+                % {use, Idx, Obj} - use this object
+                % {fetch, Idx, Obj} - fetch object from this node
+                % fetch_all - fetch all objects
+                fetch_all ->
+                    {fetch_all, null};
+                {use, _Idx, Obj} ->
+                    Merged = riak_object:reconcile([Obj], AllowMult),
+                    case riak_kv_util:is_x_deleted(Merged) of
+                        true ->
+                            {tombstone, Merged};
+                        _ ->
+                            {ok, Merged}
+                    end;
+                {fetch, Idx, Obj} ->
+                    % Obj will be a head response, but this includes metadata
+                    % to check for deletion, so deleted objects don't need to
+                    % be fetched
+                    case riak_kv_util:is_x_deleted(Obj) of
+                        true ->
+                            {tombstone, Obj};
+                        _ ->
+                            {fetch, [Idx]}
+                    end
+            end,
+            
+    end.    
+            
+
+
 
 %% @private Checks IdxType to see if Idx is a primary.
 %% If the Idx is not in the IdxType the world must be

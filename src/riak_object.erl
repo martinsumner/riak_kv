@@ -223,22 +223,18 @@ remove_dominated(Objects) ->
     Del = sets:from_list(ancestors(Objects)),
     sets:to_list(sets:subtract(All, Del)).
 
-%% @doc Take a list of {Idx, Object} tuples that have been the result of HEAD
-%% requests (which may return full objects if the backend only supports GET
-%% requests).  From this list need to find only non-dominated unequal objects
-%% as the will need to be fetched.
-%%
-%% Will hope that the last object is the best, as this was the first received
+%% @doc Take a list of {Idx, {ok, Object}} tuples that have been the result
+%% of HEAD requests or GET requests.
 %%
 %% The response is either:
-%% {use, Idx, Obj} - use this object
-%% {fetch, Idx, Clock} - fetch object from this node
+%% {use, Idx, GetObj} - use this object
+%% {fetch, Idx, HeadObj} - fetch object from this node
 %% fetch_all - fetch all objects
 
 find_bestobject(FetchedItems) ->
-    {TailIdx, TailObject} = lists:last(FetchedItems),
+    {TailIdx, {ok, TailObject}} = lists:last(FetchedItems),
     FoldFun =
-        fun({Idx, Obj}, {BestObj, IsSibling, BestIdx}) ->
+        fun({Idx, {ok, Obj}}, {BestObj, IsSibling, BestIdx}) ->
             case IsSibling of
                 true ->
                     % If there are siblings could be smart about only fetching
@@ -270,7 +266,7 @@ find_bestobject(FetchedItems) ->
                 false ->
                     {use, BestIdx, BestObj};
                 true ->
-                    {fetch, BestIdx, vclock(BestObj)}
+                    {fetch, BestIdx, BestObj}
             end
     end.
                             
@@ -1372,11 +1368,15 @@ find_bestobject_equal_test() ->
     % {fetch, Idx, Clock} - fetch object from this node
     % fetch_all - fetch all objects
     ?assertMatch({use, 1, _},
-                    find_bestobject([{3, Obj3}, {2, Obj2}, {1, Obj1}])),
+                    find_bestobject([{3, {ok, Obj3}},
+                                        {2, {ok, Obj2}},
+                                        {1, {ok, Obj1}}])),
     % In an environment with mixed backends the below test demonstrates that
     % current behaviour is sub-optimal, as a fetch here is unnecessary
     ?assertMatch({fetch, 3, _},
-                    find_bestobject([{1, Obj1}, {2, Obj2}, {3, Obj3}])).
+                    find_bestobject([{1, {ok, Obj1}},
+                                        {2, {ok, Obj2}},
+                                        {3, {ok, Obj3}}])).
 
 find_bestobject_ancestor() ->
     % one object is behind, and one of the dominant objects is head_only
@@ -1385,11 +1385,15 @@ find_bestobject_ancestor() ->
     {Obj1, Obj2} = ancestor(),
     Obj3 = convert_object_to_headonly(B, K, Obj2),
     ?assertMatch({use, 2, _},
-                    find_bestobject([{3, Obj3}, {2, Obj2}, {1, Obj1}])),
+                    find_bestobject([{3, {ok, Obj3}},
+                                        {2, {ok, Obj2}},
+                                        {1, {ok, Obj1}}])),
     % In an environment with mixed backends the below test demonstrates that
     % current behaviour is sub-optimal, as a fetch here is unnecessary
     ?assertMatch({fetch, 3, _},
-                    find_bestobject([{2, Obj2}, {3, Obj3}, {1, Obj1}])).
+                    find_bestobject([{2, {ok, Obj2}},
+                                        {3, {ok, Obj3}},
+                                        {1, {ok, Obj1}}])).
 
 find_bestobject_reconcile() ->
     B = <<"buckets_are_binaries">>,
@@ -1399,11 +1403,15 @@ find_bestobject_reconcile() ->
     Obj3 = riak_object:increment_vclock(UpdO, alt_pid),
     Obj4 = convert_object_to_headonly(B, K, Obj3),
     ?assertMatch(fetch_all,
-                    find_bestobject([{1, Obj1}, {2, Obj2},
-                                        {3, Obj3}, {4, Obj4}])),
+                    find_bestobject([{1, {ok, Obj1}},
+                                        {2, {ok, Obj2}},
+                                        {3, {ok, Obj3}},
+                                        {4, {ok, Obj4}}])),
     ?assertMatch(fetch_all,
-                    find_bestobject([{4, Obj4}, {2, Obj2},
-                                        {3, Obj3}, {1, Obj1}])).
+                    find_bestobject([{4, {ok, Obj4}},
+                                        {2, {ok, Obj2}},
+                                        {3, {ok, Obj3}},
+                                        {1, {ok, Obj1}}])).
 
 update_test() ->
     O = object_test(),
