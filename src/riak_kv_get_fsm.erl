@@ -80,7 +80,7 @@
                                        [{StateName::atom(), TimeUSecs::non_neg_integer()}]} | undefined,
                 crdt_op :: undefined | true,
                 request_type :: undefined | head | get | update,
-                override_nodes = [] :: list()}  
+                override_nodes = [] :: list() 
                }).
 
 -include("riak_kv_dtrace.hrl").
@@ -329,6 +329,7 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
     StateData = 
         case RequestType2 of
             head ->
+                Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
                 riak_kv_vnode:head(Preflist, BKey, ReqId),
                 HO_GetCore = riak_kv_get_core:head_merge(GetCore),
                 % Mark the get_core as head_merge so that when determining the
@@ -336,10 +337,11 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
                 % will be used
                 StateData0#state{tref=TRef, get_core = HO_GetCore};
             update ->
-                riak_kv_vnode:get(Preflist, BKey, ReqId),
+                riak_kv_vnode:get(OverNodes, BKey, ReqId),
                 HO_GetCore = riak_kv_get_core:head_merge(GetCore),
                 StateData0#state{tref=TRef, get_core = HO_GetCore};
             get ->
+                Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
                 riak_kv_vnode:get(Preflist, BKey, ReqId),
                 StateData0#state{tref=TRef}
         end,
@@ -375,7 +377,7 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = Get
             update ->
                 riak_kv_get_core:update_result(Idx,
                                                 VnodeResult,
-                                                IdxList,
+                                                StateData#state.override_nodes,
                                                 GetCore);
             _ ->
                 riak_kv_get_core:add_result(Idx, VnodeResult, GetCore)
@@ -392,7 +394,7 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = Get
             % GET requets for that vnode)
             case {StateData#state.request_type,
                     riak_kv_get_core:response(UpdGetCore)} of
-                {R, {fetch, IdxList}} when R not get ->
+                {R, {fetch, IdxList}} when R /= get ->
                     % Trigger genuine GETs to each vnode index required to
                     % get a merged view of an object.  Hopefully should be
                     % just one

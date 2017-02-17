@@ -20,8 +20,9 @@
 %%
 %% -------------------------------------------------------------------
 -module(riak_kv_get_core).
--export([init/8, update_init/2, head_merge/1, add_result/3, result_shortcode/1, enough/1, response/1,
-         has_all_results/1, final_action/1, info/1]).
+-export([init/8, update_init/2, head_merge/1, 
+            add_result/3, update_result/4, result_shortcode/1, 
+            enough/1, response/1, has_all_results/1, final_action/1, info/1]).
 -export_type([getcore/0, result/0, reply/0, final_action/0]).
 
 -ifdef(TEST).
@@ -148,7 +149,7 @@ update_result(Idx, Result, IdxList, GetCore) ->
             % Add them to the result set - the result set will still be used
             % for read repair.  Will also detect if the last read was actually
             % a mre upto date object
-            UpdResults = [{Idx, Result}|GetCore#getcore.results]
+            UpdResults = [{Idx, Result}|GetCore#getcore.results],
             GetCore#getcore{results = UpdResults}
     end.
 

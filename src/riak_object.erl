@@ -237,7 +237,7 @@ find_bestobject(FetchedItems) ->
     % the first received (the fastest responder) - as if there is a need
     % for a follow-up fetch, we should prefer the vnode that had responded
     % fastest to he HEAD (this may be local).
-    PredHeadFun = fun({_Idx, Rsp) -> is_head(Rsp) end,
+    PredHeadFun = fun({_Idx, Rsp}) -> is_head(Rsp) end,
     {Objects, Heads} = lists:partition(PredHeadFun, FetchedItems),
     FoldList = Heads ++ Objects, 
     {TailIdx, {ok, TailObject}} = lists:last(FoldList),
@@ -251,7 +251,7 @@ find_bestobject(FetchedItems) ->
                     % merge everything if it is a sibling
                     {true, [{Idx, {ok, Obj}}|BestAnswer]};
                 false ->
-                    {BestIdx, {ok, BestObj}} = BestAnswer,
+                    {_BestIdx, {ok, BestObj}} = BestAnswer,
                     case vclock:descends(vclock(BestObj), vclock(Obj)) of
                         true ->
                             {false, BestAnswer};
@@ -260,14 +260,14 @@ find_bestobject(FetchedItems) ->
                                 true ->
                                     {false, {Idx, {ok, Obj}}};
                                 false ->
-                                    {true, [{Idx, {ok, Obj}}]}
+                                    {true, [{Idx, {ok, Obj}}|BestAnswer]}
                             end
                     end
             end
         end,
     
     case lists:foldr(FoldFun,
-                        {false, {TailIdx, {ok, TailObj}}},
+                        {false, {TailIdx, {ok, TailObject}}},
                         FoldList) of
         {true, IdxObjList} ->
             lists:partition(PredHeadFun, IdxObjList);
