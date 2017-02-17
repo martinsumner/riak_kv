@@ -79,8 +79,8 @@
                 calculated_timings :: {ResponseUSecs::non_neg_integer(),
                                        [{StateName::atom(), TimeUSecs::non_neg_integer()}]} | undefined,
                 crdt_op :: undefined | true,
-                request_type :: undefined | head | get,
-                override_nodes = {false, []} :: {boolean() | list()}  
+                request_type :: undefined | head | get | update,
+                override_nodes = [] :: list()}  
                }).
 
 -include("riak_kv_dtrace.hrl").
@@ -330,11 +330,14 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
         case RequestType2 of
             head ->
                 riak_kv_vnode:head(Preflist, BKey, ReqId),
-                HO_GetCore = riak_kv_get_core:head_only(GetCore),
-                % Mark the get_core as head_only so that when determining the
+                HO_GetCore = riak_kv_get_core:head_merge(GetCore),
+                % Mark the get_core as head_merge so that when determining the
                 % response in riak_get_core the specific head_merge function
                 % will be used
-
+                StateData0#state{tref=TRef, get_core = HO_GetCore};
+            update ->
+                riak_kv_vnode:get(Preflist, BKey, ReqId),
+                HO_GetCore = riak_kv_get_core:head_merge(GetCore),
                 StateData0#state{tref=TRef, get_core = HO_GetCore};
             get ->
                 riak_kv_vnode:get(Preflist, BKey, ReqId),
@@ -363,28 +366,53 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = Get
         _ ->
             ok
     end,
-    UpdGetCore = riak_kv_get_core:add_result(Idx, VnodeResult, GetCore),
+    % If the query has been to override_nodes will want to replace the result
+    % in the result list, not just append to the result list.  The r counter
+    % needs updating, regardless if primary, as in override_nodes loop we're
+    % no longer bothered as quorum has been met in a previous loop
+    UpdGetCore = 
+        case StateData#state.request_type of
+            update ->
+                riak_kv_get_core:update_result(Idx,
+                                                VnodeResult,
+                                                IdxList,
+                                                GetCore);
+            _ ->
+                riak_kv_get_core:add_result(Idx, VnodeResult, GetCore)
+        end,
     case riak_kv_get_core:enough(UpdGetCore) of
         true ->
-            case riak_kv_get_core:response(UpdGetCore) of
-                {fetch, IdxList} ->
+            % response(GetCore) will either call merge or head_merge. If it 
+            % has been a GET request then the result should not match to fetch
+            % or fetch_all.  Normally fetch and fetch_all should only be a
+            % response to HEAD requests, however UPDATE requests may receive a
+            % late HEAD response while waiting for a GET - and this may not
+            % descend the previously victorious answer (such as with writes
+            % which failed to hit quorum or races), so UPDATE requests may
+            % also need to loop around again
+            case {StateData#state.request_type,
+                    riak_kv_get_core:response(UpdGetCore)} of
+                {R, {fetch, IdxList}} when R not get ->
                     % Trigger genuine GETs to each vnode index required to
                     % get a merged view of an object.  Hopefully should be
                     % just one
-                    NewGC = riak_kv_get_core:get_init(length(IdxList),
-                                                        UpdGetCore),
+                    NewGC = riak_kv_get_core:update_init(length(IdxList),
+                                                            UpdGetCore),
                     {next_state,
                         execute,
-                        StateData#state{request_type = get,
-                                        override_nodes = {true, IdxList},
+                        StateData#state{request_type = update,
+                                        override_nodes = IdxList,
                                         get_core = NewGC},
                         0};
-                {fetch_all, _} ->
+                {R, {fetch_all, _}} when R not get ->
+                    % The fetch has thrown out a conflict, so start again, but
+                    % this time do GET requests so cannot end up in this case
+                    % clause again and endlessly loop
                     {next_state,
                         prepare,
                         StateData#state{request_type = get},
                         0};
-                {Reply, UpdGetCore2} ->
+                {_, {Reply, UpdGetCore2}} ->
                     StateWithReply = StateData#state{get_core = UpdGetCore2},
                     NewStateData = client_reply(Reply, StateWithReply),
                     update_stats(Reply, NewStateData),

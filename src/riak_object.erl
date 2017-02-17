@@ -232,7 +232,17 @@ remove_dominated(Objects) ->
 %% fetch_all - fetch all objects
 
 find_bestobject(FetchedItems) ->
-    {TailIdx, {ok, TailObject}} = lists:last(FetchedItems),
+    % Find the best object.  Normally we expect this to be a score-draw in
+    % terms of vector clock, so in this case 'best' means an object not a
+    % head as the get-response can be used immediately.  Then the best is
+    % the first received (the fastest responder) - as if there is a need
+    % for a follow-up fetch, we should prefer the vnode that had responded
+    % fastest to he HEAD (this may be local).
+    PredFun = fun({_Idx, {ok, Obj}) -> is_head(Obj) end,
+    [Objects, Heads] = lists:partition(PredFun, FetchedItems),
+    FoldList = Heads ++ Objects, 
+    {TailIdx, {ok, TailObject}} = lists:last(FoldList),
+    
     FoldFun =
         fun({Idx, {ok, Obj}}, {BestObj, IsSibling, BestIdx}) ->
             case IsSibling of
@@ -258,7 +268,7 @@ find_bestobject(FetchedItems) ->
     
     case lists:foldr(FoldFun,
                         {TailObject, false, TailIdx},
-                        FetchedItems) of
+                        FoldList) of
         {null, true, null} ->
             fetch_all;
         {BestObj, false, BestIdx} ->

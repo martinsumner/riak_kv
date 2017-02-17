@@ -20,7 +20,7 @@
 %%
 %% -------------------------------------------------------------------
 -module(riak_kv_get_core).
--export([init/8, get_init/2, head_only/1, add_result/3, result_shortcode/1, enough/1, response/1,
+-export([init/8, update_init/2, head_merge/1, add_result/3, result_shortcode/1, enough/1, response/1,
          has_all_results/1, final_action/1, info/1]).
 -export_type([getcore/0, result/0, reply/0, final_action/0]).
 
@@ -57,7 +57,7 @@
                   num_deleted = 0 :: non_neg_integer(),
                   num_fail = 0 :: non_neg_integer(),
                   idx_type :: idx_type(),
-                  head_only = false :: boolean()}).
+                  head_merge = false :: boolean()}).
 -opaque getcore() :: #getcore{}.
 
 %% ====================================================================
@@ -80,24 +80,20 @@ init(N, R, PR, FailThreshold, NotFoundOk, AllowMult, DeletedVClock, IdxType) ->
              idx_type = IdxType}.
 
 %% Re-initialise a get to a restricted number of vnodes (that must all respond)
--spec get_init(N::pos_integer(), getcore()) -> getcore().
-get_init(N, PrevGetCore) ->
-    #getcore{n = N,
-                r = N,
-                pr = 0,
-                fail_threshold = 0,
-                notfound_ok = PrevGetCore#getcore.notfound_ok,
-                allow_mult = PrevGetCore#getcore.allow_mult,
-                deletedvclock = PrevGetCore#getcore.deletedvclock,
-                idx_type = PrevGetCore#getcore.idx_type,
-                head_only = false}.       
+-spec update_init(N::pos_integer(), getcore()) -> getcore().
+update_init(N, PrevGetCore) ->
+    PrevGetCore#getcore{n = N,
+                        r = N,
+                        pr = 0,
+                        fail_threshold = 0,
+                        head_merge = true}.       
 
 %% Convert the get so that it is expecting to potentially receive the
 %% responses to head requests (though for backwards compatibility these may
 %% actually still be get responses)
--spec head_only(getcore()) -> getcore().
-head_only(GetCore) ->
-    GetCore#getcore{head_only = true}.
+-spec head_merge(getcore()) -> getcore().
+head_merge(GetCore) ->
+    GetCore#getcore{head_merge = true}.
 
 %% Add a result for a vnode index
 -spec add_result(non_neg_integer(), result(), getcore()) -> getcore().
@@ -130,6 +126,33 @@ add_result(Idx, {error, _Reason} = Result, GetCore) ->
         merged = undefined,
         num_fail = GetCore#getcore.num_fail + 1}.
 
+%% Replace a result for a vnode index i.e. when the result had previously
+%% been as a result of a HEAD, and there is now a result from a GET
+%% Ignore any results which were not from the list of updated indexes
+-spec update_result(non_neg_integer(),
+                    result(),
+                    list(),
+                    getcore()) -> getcore().
+update_result(Idx, Result, IdxList, GetCore) ->
+    case lists:member(Idx, IdxList) of
+        true ->
+            % This results should always be OK
+            UpdResults = lists:keyreplace({Idx, Result}, 1, GetCore#getcore.results),
+            GetCore#getcore{results = UpdResults,
+                                merged = undefined,
+                                num_ok = GetCore#getcore.num_ok + 1};
+        false ->
+            % This is expected, sent n head requests originally, enough was
+            % reached at r/pr - so if have a follow on GET may receive n-r
+            % delayed HEADs while waiting
+            % Add them to the result set - the result set will still be used
+            % for read repair.  Will also detect if the last read was actually
+            % a mre upto date object
+            UpdResults = [{Idx, Result}|GetCore#getcore.results]
+            GetCore#getcore{results = UpdResults}
+    end.
+
+
 result_shortcode({ok, _RObj})       -> 1;
 result_shortcode({error, notfound}) -> 0;
 result_shortcode(_)                 -> -1.
@@ -154,8 +177,8 @@ enough(_) ->
 %% Get success/fail response once enough results received
 -spec response(getcore()) -> {reply(), getcore()}.
 %% Met quorum for a standard get request/response
-response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK, head_only = HO} = GetCore)
-        when NumOK >= R andalso NumPOK >= PR andalso HO == false ->
+response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK, head_merge = HM} = GetCore)
+        when NumOK >= R andalso NumPOK >= PR andalso HM == false ->
     #getcore{results = Results, allow_mult=AllowMult,
         deletedvclock = DeletedVClock} = GetCore,
     {ObjState, MObj} = Merged = merge(Results, AllowMult),
@@ -349,13 +372,17 @@ merge(Replies, AllowMult) ->
 
 %% @private - replaces the merge method when an initial HEAD request is used
 %% not a GET request.  The results returned will be either normal objects (if
-%% a backend not supporting HEAD was called), or body-less objects.
+%% a backend not supporting HEAD was called, or the operation was an UPDATE),
+%% or body-less objects.
 %%
 %% The vector clocks need to be checked to see if there is any merge activity
 %% required.  If not, then a single GET is used to get the required object (or
 %% the object is used if it was not a response to a HEAD request).  If there
 %% is merge activity required, each object is fetched (if no body) is present
 %% and the legacy merge function is applied.
+%%
+%% The implementation is a bit lazy in that it does not attempt to merge
+%% siblings even if there are sufficient complete objects present to do so
 head_merge(Replies, AllowMult) ->
     % Replies should be a list of [{Idx, {ok, RObj}]
     IdxObjs = [{I, {ok, RObj}} || {I, {ok, RObj}} <- Replies],
