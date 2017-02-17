@@ -329,18 +329,25 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
     StateData = 
         case RequestType2 of
             head ->
-                Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
-                riak_kv_vnode:head(Preflist, BKey, ReqId),
-                HO_GetCore = riak_kv_get_core:head_merge(GetCore),
                 % Mark the get_core as head_merge so that when determining the
                 % response in riak_get_core the specific head_merge function
                 % will be used
+                %
+                % Send head requests to all the Preflist
+                Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
+                riak_kv_vnode:head(Preflist, BKey, ReqId),
+                HO_GetCore = riak_kv_get_core:head_merge(GetCore),
                 StateData0#state{tref=TRef, get_core = HO_GetCore};
             update ->
+                % Need to send get requests, but still merge using head_merge
+                % as there will still be head results in the result list, and
+                % more head results  may arrive from previous HEAD request
                 riak_kv_vnode:get(OverNodes, BKey, ReqId),
                 HO_GetCore = riak_kv_get_core:head_merge(GetCore),
                 StateData0#state{tref=TRef, get_core = HO_GetCore};
             get ->
+                % Only used if the default is switched back to start with a GET
+                % not a HEAD
                 Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
                 riak_kv_vnode:get(Preflist, BKey, ReqId),
                 StateData0#state{tref=TRef}
@@ -358,13 +365,15 @@ preflist_for_tracing(Preflist) ->
      end || {Idx, Nd} <- lists:sublist(Preflist, 4)].
 
 %% @private
-waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = GetCore,
-                                                                  trace = Trace}) ->
+waiting_vnode_r({r, VnodeResult, Idx, _ReqId},
+                    StateData = #state{get_core = GetCore, trace = Trace}) ->
     case Trace of
         true ->
             ShortCode = riak_kv_get_core:result_shortcode(VnodeResult),
             IdxStr = integer_to_list(Idx),
-            ?DTRACE(?C_GET_FSM_WAITING_R, [ShortCode], ["waiting_vnode_r", IdxStr]);
+            ?DTRACE(?C_GET_FSM_WAITING_R,
+                        [ShortCode],
+                        ["waiting_vnode_r", IdxStr]);
         _ ->
             ok
     end,
@@ -385,13 +394,13 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = Get
     case riak_kv_get_core:enough(UpdGetCore) of
         true ->
             % response(GetCore) will either call merge or head_merge. This
-            % will depend on the getcore object being set to head_merge of not.
+            % will depend on the getcore object being set to head_merge or not.
             % head_merge is used for updates or heads.
             %
             % If it is not a get, and head merge is called a fetch return may
             % be made which is a request to update certain objects in the
             % results with bodies (i.e. by substituting a HEAD request with a
-            % GET requets for that vnode)
+            % GET request for that vnode)
             case {StateData#state.request_type,
                     riak_kv_get_core:response(UpdGetCore)} of
                 {R, {fetch, IdxList}} when R /= get ->
@@ -413,8 +422,11 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = Get
                     maybe_finalize(NewStateData)
             end;
         false ->
-            %% don't use new_state/2 since we do timing per state, not per message in state
-            {next_state, waiting_vnode_r,  StateData#state{get_core = UpdGetCore}}
+            %% don't use new_state/2 since we do timing per state, not per
+            %% message in state
+            {next_state,
+                waiting_vnode_r,
+                StateData#state{get_core = UpdGetCore}}
     end;
 waiting_vnode_r(request_timeout, StateData = #state{trace=Trace}) ->
     ?DTRACE(Trace, ?C_GET_FSM_WAITING_R_TIMEOUT, [-2], 
