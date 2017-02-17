@@ -206,10 +206,6 @@ response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK} = GetCore)
         {fetch, IdxList} ->
             % A list of vnode indexes to be fetched from using a GET request
             {{fetch, IdxList}, GetCore};
-        {fetch_all, _} ->
-            % Trigger to go back to the start and re-initiate but forcing GETs
-            % not HEAD requests
-            {{fetch_all, null}, GetCore};
         _ -> % tombstone or notfound or expired
             {{error, notfound}, GetCore#getcore{merged = Merged}}
     end;
@@ -375,14 +371,7 @@ merge(Replies, AllowMult) ->
 %% a backend not supporting HEAD was called, or the operation was an UPDATE),
 %% or body-less objects.
 %%
-%% The vector clocks need to be checked to see if there is any merge activity
-%% required.  If not, then a single GET is used to get the required object (or
-%% the object is used if it was not a response to a HEAD request).  If there
-%% is merge activity required, each object is fetched (if no body) is present
-%% and the legacy merge function is applied.
-%%
-%% The implementation is a bit lazy in that it does not attempt to merge
-%% siblings even if there are sufficient complete objects present to do so
+
 head_merge(Replies, AllowMult) ->
     % Replies should be a list of [{Idx, {ok, RObj}]
     IdxObjs = [{I, {ok, RObj}} || {I, {ok, RObj}} <- Replies],
@@ -391,30 +380,21 @@ head_merge(Replies, AllowMult) ->
         [] ->
             {notfound, undefined};
         _ ->
-            case riak_object:find_bestobject(IdxObjs) of
-                % {use, Idx, Obj} - use this object
-                % {fetch, Idx, Obj} - fetch object from this node
-                % fetch_all - fetch all objects
-                fetch_all ->
-                    {fetch_all, null};
-                {use, _Idx, Obj} ->
-                    Merged = riak_object:reconcile([Obj], AllowMult),
-                    case riak_kv_util:is_x_deleted(Merged) of
-                        true ->
-                            {tombstone, Merged};
-                        _ ->
-                            {ok, Merged}
-                    end;
-                {fetch, Idx, Obj} ->
-                    % Obj will be a head response, but this includes metadata
-                    % to check for deletion, so deleted objects don't need to
-                    % be fetched
+            {BestReplies, FetchIdxObjL} = riak_object:find_bestobject(IdxObjs),
+            FoldFun =
+                fun({Idx, {ok, Obj}}, Acc) ->
                     case riak_kv_util:is_x_deleted(Obj) of
                         true ->
-                            {tombstone, Obj};
-                        _ ->
-                            {fetch, [Idx]}
+                            Acc;
+                        false ->
+                            [Idx|Acc]
                     end
+                end,
+            case lists:foldr(FoldFun, [], FetchIdxObjL) of
+                [] ->
+                    merge(BestReplies, AllowMult);
+                IdxL ->
+                    {fetch, IdxL}
             end
     end.    
             

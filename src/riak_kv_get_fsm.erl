@@ -382,14 +382,14 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = Get
         end,
     case riak_kv_get_core:enough(UpdGetCore) of
         true ->
-            % response(GetCore) will either call merge or head_merge. If it 
-            % has been a GET request then the result should not match to fetch
-            % or fetch_all.  Normally fetch and fetch_all should only be a
-            % response to HEAD requests, however UPDATE requests may receive a
-            % late HEAD response while waiting for a GET - and this may not
-            % descend the previously victorious answer (such as with writes
-            % which failed to hit quorum or races), so UPDATE requests may
-            % also need to loop around again
+            % response(GetCore) will either call merge or head_merge. This
+            % will depend on the getcore object being set to head_merge of not.
+            % head_merge is used for updates or heads.
+            %
+            % If it is not a get, and head merge is called a fetch return may
+            % be made which is a request to update certain objects in the
+            % results with bodies (i.e. by substituting a HEAD request with a
+            % GET requets for that vnode)
             case {StateData#state.request_type,
                     riak_kv_get_core:response(UpdGetCore)} of
                 {R, {fetch, IdxList}} when R not get ->
@@ -403,14 +403,6 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = Get
                         StateData#state{request_type = update,
                                         override_nodes = IdxList,
                                         get_core = NewGC},
-                        0};
-                {R, {fetch_all, _}} when R not get ->
-                    % The fetch has thrown out a conflict, so start again, but
-                    % this time do GET requests so cannot end up in this case
-                    % clause again and endlessly loop
-                    {next_state,
-                        prepare,
-                        StateData#state{request_type = get},
                         0};
                 {_, {Reply, UpdGetCore2}} ->
                     StateWithReply = StateData#state{get_core = UpdGetCore2},

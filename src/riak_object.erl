@@ -226,11 +226,10 @@ remove_dominated(Objects) ->
 %% @doc Take a list of {Idx, {ok, Object}} tuples that have been the result
 %% of HEAD requests or GET requests.
 %%
-%% The response is either:
-%% {use, Idx, GetObj} - use this object
-%% {fetch, Idx, HeadObj} - fetch object from this node
-%% fetch_all - fetch all objects
-
+%% Works out the best answers and returns {IdxObjList, IdxHeadList} where the
+%% IdxHeadList is a list of indexes and headers that may need to be updated to
+%% objects before the merge can be complete, and the IdxObjList is a list of
+%% vnode indexes and objects which are ready to be merged
 find_bestobject(FetchedItems) ->
     % Find the best object.  Normally we expect this to be a score-draw in
     % terms of vector clock, so in this case 'best' means an object not a
@@ -238,52 +237,53 @@ find_bestobject(FetchedItems) ->
     % the first received (the fastest responder) - as if there is a need
     % for a follow-up fetch, we should prefer the vnode that had responded
     % fastest to he HEAD (this may be local).
-    PredFun = fun({_Idx, {ok, Obj}) -> is_head(Obj) end,
-    [Objects, Heads] = lists:partition(PredFun, FetchedItems),
+    PredHeadFun = fun({_Idx, Rsp) -> is_head(Rsp) end,
+    {Objects, Heads} = lists:partition(PredHeadFun, FetchedItems),
     FoldList = Heads ++ Objects, 
     {TailIdx, {ok, TailObject}} = lists:last(FoldList),
     
     FoldFun =
-        fun({Idx, {ok, Obj}}, {BestObj, IsSibling, BestIdx}) ->
+        fun({Idx, {ok, Obj}}, {IsSibling, BestAnswer}) ->
             case IsSibling of
                 true ->
                     % If there are siblings could be smart about only fetching
                     % conflicting objects. Will be lazy, though - fetch and
                     % merge everything if it is a sibling
-                    {null, true, null};
+                    {true, [{Idx, {ok, Obj}}|BestAnswer]};
                 false ->
+                    {BestIdx, {ok, BestObj}} = BestAnswer,
                     case vclock:descends(vclock(BestObj), vclock(Obj)) of
                         true ->
-                            {BestObj, false, BestIdx};
+                            {false, BestAnswer};
                         false ->                    
                             case vclock:descends(vclock(Obj), vclock(BestObj)) of
                                 true ->
-                                    {Obj, false, Idx};
+                                    {false, {Idx, {ok, Obj}}};
                                 false ->
-                                    {null, true, null}
+                                    {true, [{Idx, {ok, Obj}}]}
                             end
                     end
             end
         end,
     
     case lists:foldr(FoldFun,
-                        {TailObject, false, TailIdx},
+                        {false, {TailIdx, {ok, TailObj}}},
                         FoldList) of
-        {null, true, null} ->
-            fetch_all;
-        {BestObj, false, BestIdx} ->
+        {true, IdxObjList} ->
+            lists:partition(PredHeadFun, IdxObjList);
+        {false, {BestIdx, BestObj}} ->
             case is_head(BestObj) of
                 false ->
-                    {use, BestIdx, BestObj};
+                    {[{BestIdx, {ok, BestObj}}], []};
                 true ->
-                    {fetch, BestIdx, BestObj}
+                    {[], [{BestIdx, {ok, BestObj}}]}
             end
     end.
                             
 
 %% @private Check if an object is simply a head response
 
-is_head(Obj) ->
+is_head({ok, Obj}) ->
     C0 = lists:nth(1, Obj#r_object.contents),
     case C0#r_content.value of
         head_only ->
