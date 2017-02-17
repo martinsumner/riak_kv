@@ -138,7 +138,9 @@ update_result(Idx, Result, IdxList, GetCore) ->
     case lists:member(Idx, IdxList) of
         true ->
             % This results should always be OK
-            UpdResults = lists:keyreplace({Idx, Result}, 1, GetCore#getcore.results),
+            UpdResults = lists:keyreplace({Idx, Result},
+                                            1,
+                                            GetCore#getcore.results),
             GetCore#getcore{results = UpdResults,
                                 merged = undefined,
                                 num_ok = GetCore#getcore.num_ok + 1};
@@ -148,9 +150,10 @@ update_result(Idx, Result, IdxList, GetCore) ->
             % delayed HEADs while waiting
             % Add them to the result set - the result set will still be used
             % for read repair.  Will also detect if the last read was actually
-            % a mre upto date object
+            % a more upto date object
             UpdResults = [{Idx, Result}|GetCore#getcore.results],
-            GetCore#getcore{results = UpdResults}
+            GetCore#getcore{results = UpdResults,
+                                merges = undefined}
     end.
 
 
@@ -454,6 +457,26 @@ maybe_log_old_vclock(Results) ->
     end.
 
 -ifdef(TEST).
+
+update_test() ->
+    GC0 = #getcore{n= 3, r = 2, pr=0, 
+                    fail_threshold = 1, num_ok = 2, num_pok = 0,
+                    num_notfound = 0, num_deleted = 0, num_fail = 0,
+                    results = [{1, {ok, fake_head1}}, {2, {ok, fake_head2}}]},
+    GC1 = update_init(1, GC0),
+    GC2 = update_result(3, {ok, fake_head3}, [2], GC1),
+    ?assertMatch(0, GC2#getcore.num_ok),
+    ?assertMatch(1, GC2#getcore.r),
+    ?assertMatch(3, length(GC2#getcore.results)),
+    GC3 = update_result(2, {ok, fake_get2}, [2], GC2),
+    ?assertMatch(1, GC3#getcore.num_ok),
+    ?assertMatch(1, GC3#getcore.r),
+    ?assertMatch(3, length(GC3#getcore.results)),
+    ?assertMatch([{3, {ok, fake_head3}},
+                        {1, {ok, fake_head1}},
+                        {2, {ok, fake_get2}}],
+                    GC3#getcore.results).
+
 %% simple sanity tests
 enough_test_() ->
     [
