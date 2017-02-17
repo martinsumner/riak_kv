@@ -237,7 +237,7 @@ find_bestobject(FetchedItems) ->
     % the first received (the fastest responder) - as if there is a need
     % for a follow-up fetch, we should prefer the vnode that had responded
     % fastest to he HEAD (this may be local).
-    PredHeadFun = fun({_Idx, Rsp}) -> is_head(Rsp) end,
+    PredHeadFun = fun({_Idx, Rsp}) -> not is_head(Rsp) end,
     {Objects, Heads} = lists:partition(PredHeadFun, FetchedItems),
     FoldList = Heads ++ Objects, 
     {TailIdx, {ok, TailObject}} = lists:last(FoldList),
@@ -260,7 +260,7 @@ find_bestobject(FetchedItems) ->
                                 true ->
                                     {false, {Idx, {ok, Obj}}};
                                 false ->
-                                    {true, [{Idx, {ok, Obj}}|BestAnswer]}
+                                    {true, [{Idx, {ok, Obj}}|[BestAnswer]]}
                             end
                     end
             end
@@ -274,9 +274,9 @@ find_bestobject(FetchedItems) ->
         {false, {BestIdx, BestObj}} ->
             case is_head(BestObj) of
                 false ->
-                    {[{BestIdx, {ok, BestObj}}], []};
+                    {[{BestIdx, BestObj}], []};
                 true ->
-                    {[], [{BestIdx, {ok, BestObj}}]}
+                    {[], [{BestIdx, BestObj}]}
             end
     end.
                             
@@ -1372,18 +1372,17 @@ find_bestobject_equal_test() ->
     Obj1 = InObject,
     Obj2 = InObject,
     Obj3 = convert_object_to_headonly(B, K, InObject),
-    ?assertMatch(true, is_head(Obj3)),
-    % The response is either:
-    % {use, Idx, Obj} - use this object
-    % {fetch, Idx, Clock} - fetch object from this node
-    % fetch_all - fetch all objects
-    ?assertMatch({use, 1, _},
+    ?assertMatch(true, is_head({ok, Obj3})),
+    ?assertMatch(false, is_head({ok, Obj1})),
+    % The response is:
+    % {[{Idx, {ok, ObjG}}], [{Idx, {ok, ObjH}}] where heads need to be fetched
+    % and gets are ready to be merged
+    ?assertMatch({[{1, {ok, Obj1}}], []},
                     find_bestobject([{3, {ok, Obj3}},
                                         {2, {ok, Obj2}},
                                         {1, {ok, Obj1}}])),
-    % In an environment with mixed backends the below test demonstrates that
-    % current behaviour is sub-optimal, as a fetch here is unnecessary
-    ?assertMatch({fetch, 3, _},
+    % Shuffle and get same result
+    ?assertMatch({[{2, {ok, Obj2}}], []},
                     find_bestobject([{1, {ok, Obj1}},
                                         {2, {ok, Obj2}},
                                         {3, {ok, Obj3}}])).
@@ -1394,13 +1393,12 @@ find_bestobject_ancestor() ->
     K = <<"keys are binaries">>,
     {Obj1, Obj2} = ancestor(),
     Obj3 = convert_object_to_headonly(B, K, Obj2),
-    ?assertMatch({use, 2, _},
+    ?assertMatch({[{2, {ok, Obj2}}], []},
                     find_bestobject([{3, {ok, Obj3}},
                                         {2, {ok, Obj2}},
                                         {1, {ok, Obj1}}])),
-    % In an environment with mixed backends the below test demonstrates that
-    % current behaviour is sub-optimal, as a fetch here is unnecessary
-    ?assertMatch({fetch, 3, _},
+    % Change ordering - still works
+    ?assertMatch({[{2, {ok, Obj2}}], []},
                     find_bestobject([{2, {ok, Obj2}},
                                         {3, {ok, Obj3}},
                                         {1, {ok, Obj1}}])).
@@ -1411,17 +1409,34 @@ find_bestobject_reconcile() ->
     {Obj1, UpdO} = update_test(),
     Obj2 = riak_object:increment_vclock(UpdO, one_pid),
     Obj3 = riak_object:increment_vclock(UpdO, alt_pid),
-    Obj4 = convert_object_to_headonly(B, K, Obj3),
-    ?assertMatch(fetch_all,
+    Obj4 = convert_object_to_headonly(B, K, Obj2),
+    Obj5 = convert_object_to_headonly(B, K, Obj3),
+    ?assertMatch({[{1, {ok, Obj1}},
+                        {2, {ok, Obj2}},
+                        {3, {ok, Obj3}}],
+                    [{4, {ok, Obj4}}]},
                     find_bestobject([{1, {ok, Obj1}},
                                         {2, {ok, Obj2}},
                                         {3, {ok, Obj3}},
                                         {4, {ok, Obj4}}])),
-    ?assertMatch(fetch_all,
+    % due to change in ordering knows that 1 is dominated
+    ?assertMatch({[{2, {ok, Obj2}},
+                        {3, {ok, Obj3}}],
+                    [{4, {ok, Obj4}}]},
                     find_bestobject([{4, {ok, Obj4}},
                                         {2, {ok, Obj2}},
                                         {3, {ok, Obj3}},
+                                        {1, {ok, Obj1}}])),
+    ?assertMatch({[{2, {ok, Obj2}},
+                        {3, {ok, Obj3}}],
+                    [{4, {ok, Obj4}},
+                        {5, {ok, Obj5}}]},
+                    find_bestobject([{4, {ok, Obj4}},
+                                        {2, {ok, Obj2}},
+                                        {3, {ok, Obj3}},
+                                        {5, {ok, Obj5}},
                                         {1, {ok, Obj1}}])).
+
 
 update_test() ->
     O = object_test(),
