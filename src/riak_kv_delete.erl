@@ -257,119 +257,120 @@ failed_sweep(Index, _Acc, Reason) ->
 %% ===================================================================
 -ifdef(TEST).
 
-delete_test_() ->
-    %% Execute the test cases
-    {foreach,
-      setup(),
-      cleanup(),
-      [
-          fun invalid_r_delete/0,
-          fun invalid_rw_delete/0,
-          fun invalid_w_delete/0,
-          fun invalid_pr_delete/0,
-          fun invalid_pw_delete/0
-      ]
-  }.
+% delete_test_() ->
+%     %% Execute the test cases
+%     io:format(user, "Perfomring delete tests~n", []),
+%     {foreach,
+%       setup(),
+%       cleanup(),
+%       [
+%           fun invalid_r_delete/0,
+%           fun invalid_rw_delete/0,
+%           fun invalid_w_delete/0,
+%           fun invalid_pr_delete/0,
+%           fun invalid_pw_delete/0
+%       ]
+%   }.
 
-invalid_rw_delete() ->
-    RW = <<"abc">>,
-    %% Start the gen_fsm process
-    RequestId = erlang:phash2(erlang:now()),
-    Bucket = <<"testbucket">>,
-    Key = <<"testkey">>,
-    Timeout = 60000,
-    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{rw,RW}], Timeout, self()]),
-    %% Wait for error response
-    receive
-        {_RequestId, Result} ->
-            ?assertEqual({error, {rw_val_violation, <<"abc">>}}, Result)
-    after
-        5000 ->
-            ?assert(false)
-    end.
+% invalid_rw_delete() ->
+%     RW = <<"abc">>,
+%     %% Start the gen_fsm process
+%     RequestId = erlang:phash2(erlang:now()),
+%     Bucket = <<"testbucket">>,
+%     Key = <<"testkey">>,
+%     Timeout = 60000,
+%     riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{rw,RW}], Timeout, self()]),
+%     %% Wait for error response
+%     receive
+%         {_RequestId, Result} ->
+%             ?assertEqual({error, {rw_val_violation, <<"abc">>}}, Result)
+%     after
+%         5000 ->
+%             ?assert(false)
+%     end.
 
-invalid_r_delete() ->
-    R = <<"abc">>,
-    %% Start the gen_fsm process
-    RequestId = erlang:phash2(erlang:now()),
-    Bucket = <<"testbucket">>,
-    Key = <<"testkey">>,
-    Timeout = 60000,
-    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{r,R}], Timeout, self()]),
-    %% Wait for error response
-    receive
-        {_RequestId, Result} ->
-            ?assertEqual({error, {r_val_violation, <<"abc">>}}, Result)
-    after
-        5000 ->
-            ?assert(false)
-    end.
+% invalid_r_delete() ->
+%     R = <<"abc">>,
+%     %% Start the gen_fsm process
+%     RequestId = erlang:phash2(erlang:now()),
+%     Bucket = <<"testbucket">>,
+%     Key = <<"testkey">>,
+%     Timeout = 60000,
+%     riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{r,R}], Timeout, self()]),
+%     %% Wait for error response
+%     receive
+%         {_RequestId, Result} ->
+%             ?assertEqual({error, {r_val_violation, <<"abc">>}}, Result)
+%     after
+%         5000 ->
+%             ?assert(false)
+%     end.
 
-invalid_w_delete() ->
-    W = <<"abc">>,
-    %% Start the gen_fsm process
-    RequestId = erlang:phash2(erlang:now()),
-    Bucket = <<"testbucket">>,
-    Key = <<"testkey">>,
-    Timeout = 60000,
-    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{w,W}],
-            Timeout, self(), undefined, vclock:fresh()]),
-    %% Wait for error response
-    receive
-        {_RequestId, Result} ->
-            ?assertEqual({error, {w_val_violation, <<"abc">>}}, Result)
-    after
-        5000 ->
-            ?assert(false)
-    end.
+% invalid_w_delete() ->
+%     W = <<"abc">>,
+%     %% Start the gen_fsm process
+%     RequestId = erlang:phash2(erlang:now()),
+%     Bucket = <<"testbucket">>,
+%     Key = <<"testkey">>,
+%     Timeout = 60000,
+%     riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{w,W}],
+%             Timeout, self(), undefined, vclock:fresh()]),
+%     %% Wait for error response
+%     receive
+%         {_RequestId, Result} ->
+%             ?assertEqual({error, {w_val_violation, <<"abc">>}}, Result)
+%     after
+%         5000 ->
+%             ?assert(false)
+%     end.
 
-invalid_pr_delete() ->
-    PR = <<"abc">>,
-    %% Start the gen_fsm process
-    RequestId = erlang:phash2(erlang:now()),
-    Bucket = <<"testbucket">>,
-    Key = <<"testkey">>,
-    Timeout = 60000,
-    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{pr,PR}], Timeout, self()]),
-    %% Wait for error response
-    receive
-        {_RequestId, Result} ->
-            ?assertEqual({error, {pr_val_violation, <<"abc">>}}, Result)
-    after
-        5000 ->
-            ?assert(false)
-    end.
+% invalid_pr_delete() ->
+%     PR = <<"abc">>,
+%     %% Start the gen_fsm process
+%     RequestId = erlang:phash2(erlang:now()),
+%     Bucket = <<"testbucket">>,
+%     Key = <<"testkey">>,
+%     Timeout = 60000,
+%     riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{pr,PR}], Timeout, self()]),
+%     %% Wait for error response
+%     receive
+%         {_RequestId, Result} ->
+%             ?assertEqual({error, {pr_val_violation, <<"abc">>}}, Result)
+%     after
+%         5000 ->
+%             ?assert(false)
+%     end.
 
-invalid_pw_delete() ->
-    PW = <<"abc">>,
-    %% Start the gen_fsm process
-    RequestId = erlang:phash2(erlang:now()),
-    Bucket = <<"testbucket">>,
-    Key = <<"testkey">>,
-    Timeout = 60000,
-    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key,
-            [{pw,PW}], Timeout, self(), undefined, vclock:fresh()]),
-    %% Wait for error response
-    receive
-        {_RequestId, Result} ->
-            ?assertEqual({error, {pw_val_violation, <<"abc">>}}, Result)
-    after
-        5000 ->
-            ?assert(false)
-    end.
+% invalid_pw_delete() ->
+%     PW = <<"abc">>,
+%     %% Start the gen_fsm process
+%     RequestId = erlang:phash2(erlang:now()),
+%     Bucket = <<"testbucket">>,
+%     Key = <<"testkey">>,
+%     Timeout = 60000,
+%     riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key,
+%             [{pw,PW}], Timeout, self(), undefined, vclock:fresh()]),
+%     %% Wait for error response
+%     receive
+%         {_RequestId, Result} ->
+%             ?assertEqual({error, {pw_val_violation, <<"abc">>}}, Result)
+%     after
+%         5000 ->
+%             ?assert(false)
+%     end.
 
-configure(load) ->
-    application:set_env(riak_core, default_bucket_props,
-                        [{r, quorum}, {w, quorum}, {pr, 0}, {pw, 0},
-                         {rw, quorum}, {n_val, 3}]),
-    application:set_env(riak_kv, storage_backend, riak_kv_memory_backend);
-configure(_) -> ok.
+% configure(load) ->
+%     application:set_env(riak_core, default_bucket_props,
+%                         [{r, quorum}, {w, quorum}, {pr, 0}, {pw, 0},
+%                          {rw, quorum}, {n_val, 3}]),
+%     application:set_env(riak_kv, storage_backend, riak_kv_memory_backend);
+% configure(_) -> ok.
 
-setup() ->
-    riak_kv_test_util:common_setup(?MODULE, fun configure/1).
+% setup() ->
+%     riak_kv_test_util:common_setup(?MODULE, fun configure/1).
 
-cleanup() ->
-    riak_kv_test_util:common_cleanup(?MODULE, fun configure/1).
+% cleanup() ->
+%     riak_kv_test_util:common_cleanup(?MODULE, fun configure/1).
 
 
 -endif.

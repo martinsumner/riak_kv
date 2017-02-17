@@ -946,7 +946,12 @@ leveldb_rbe_test_() ->
     }.
 
 start_exometer_test_env() ->
-    ok = exometer:start(),
+    case exometer:start() of 
+        ok -> 
+            io:format(user, "Clean exometer start~n", []);
+        {error, {{already_started, Pid}, _}} ->
+            io:format(user, "Exometer already started ~w~n", [Pid])
+    end,
     ok = meck:new(riak_core_ring_manager),
     ok = meck:new(riak_core_ring),
     ok = meck:new(riak_kv_vnode),

@@ -87,6 +87,10 @@ update_init(N, PrevGetCore) ->
                         r = N,
                         pr = 0,
                         fail_threshold = 0,
+                        num_ok = 0,
+                        num_pok = 0,
+                        num_notfound = 0,
+                        num_fail = 0,
                         head_merge = true}.       
 
 %% Convert the get so that it is expecting to potentially receive the
@@ -138,9 +142,10 @@ update_result(Idx, Result, IdxList, GetCore) ->
     case lists:member(Idx, IdxList) of
         true ->
             % This results should always be OK
-            UpdResults = lists:keyreplace({Idx, Result},
+            UpdResults = lists:keyreplace(Idx,
                                             1,
-                                            GetCore#getcore.results),
+                                            GetCore#getcore.results,
+                                            {Idx, Result}),
             GetCore#getcore{results = UpdResults,
                                 merged = undefined,
                                 num_ok = GetCore#getcore.num_ok + 1};
@@ -153,7 +158,7 @@ update_result(Idx, Result, IdxList, GetCore) ->
             % a more upto date object
             UpdResults = [{Idx, Result}|GetCore#getcore.results],
             GetCore#getcore{results = UpdResults,
-                                merges = undefined}
+                                merged = undefined}
     end.
 
 
