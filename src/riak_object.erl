@@ -99,6 +99,7 @@
 -export([update_last_modified/1, update_last_modified/2]).
 -export([strict_descendant/2]).
 -export([find_bestobject/1]).
+-export([convert_object_to_headonly/3]). % Used in unit testing of get_core
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().

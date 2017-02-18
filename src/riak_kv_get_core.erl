@@ -45,6 +45,7 @@
 -record(getcore, {n :: pos_integer(),
                   r :: pos_integer(),
                   pr :: pos_integer(),
+                  ur :: non_neg_integer(), % updated reads
                   fail_threshold :: pos_integer(),
                   notfound_ok :: boolean(),
                   allow_mult :: boolean(),
@@ -57,6 +58,7 @@
                   num_notfound = 0 :: non_neg_integer(),
                   num_deleted = 0 :: non_neg_integer(),
                   num_fail = 0 :: non_neg_integer(),
+                  num_upd = 0 :: non_neg_integer(),
                   idx_type :: idx_type(),
                   head_merge = false :: boolean()}).
 -opaque getcore() :: #getcore{}.
@@ -74,6 +76,7 @@ init(N, R, PR, FailThreshold, NotFoundOk, AllowMult, DeletedVClock, IdxType) ->
     #getcore{n = N,
              r = R,
              pr = PR,
+             ur = 0,
              fail_threshold = FailThreshold,
              notfound_ok = NotFoundOk,
              allow_mult = AllowMult,
@@ -83,14 +86,7 @@ init(N, R, PR, FailThreshold, NotFoundOk, AllowMult, DeletedVClock, IdxType) ->
 %% Re-initialise a get to a restricted number of vnodes (that must all respond)
 -spec update_init(N::pos_integer(), getcore()) -> getcore().
 update_init(N, PrevGetCore) ->
-    PrevGetCore#getcore{n = N,
-                        r = N,
-                        pr = 0,
-                        fail_threshold = 0,
-                        num_ok = 0,
-                        num_pok = 0,
-                        num_notfound = 0,
-                        num_fail = 0,
+    PrevGetCore#getcore{ur = N,
                         head_merge = true}.       
 
 %% Convert the get so that it is expecting to potentially receive the
@@ -148,7 +144,7 @@ update_result(Idx, Result, IdxList, GetCore) ->
                                             {Idx, Result}),
             GetCore#getcore{results = UpdResults,
                                 merged = undefined,
-                                num_ok = GetCore#getcore.num_ok + 1};
+                                num_upd = GetCore#getcore.num_upd + 1};
         false ->
             % This is expected, sent n head requests originally, enough was
             % reached at r/pr - so if have a follow on GET may receive n-r
@@ -156,9 +152,7 @@ update_result(Idx, Result, IdxList, GetCore) ->
             % Add them to the result set - the result set will still be used
             % for read repair.  Will also detect if the last read was actually
             % a more upto date object
-            UpdResults = [{Idx, Result}|GetCore#getcore.results],
-            GetCore#getcore{results = UpdResults,
-                                merged = undefined}
+            add_result(Idx, Result, GetCore)
     end.
 
 
@@ -169,8 +163,10 @@ result_shortcode(_)                 -> -1.
 %% Check if enough results have been added to respond
 -spec enough(getcore()) -> boolean().
 %% Met quorum
-enough(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK}) when
-      NumOK >= R andalso NumPOK >= PR ->
+enough(#getcore{r = R, ur = UR, pr= PR, 
+                    num_ok = NumOK, num_pok = NumPOK, 
+                    num_upd = NumUPD}) when
+      NumOK >= R andalso NumPOK >= PR andalso NumUPD >= UR ->
     true;
 %% too many failures
 enough(#getcore{fail_threshold = FailThreshold, num_notfound = NumNotFound,
@@ -464,20 +460,33 @@ maybe_log_old_vclock(Results) ->
 -ifdef(TEST).
 
 update_test() ->
+    B = <<"buckets are binaries">>,
+    K = <<"keys are binaries">>,
+    V = <<"Some value">>,
+    InObject = riak_object:new(B, K, V,
+                                dict:from_list([{<<"X-Riak-Val-Encoding">>, 2},
+                                {<<"X-Foo_MetaData">>, "Foo"}])),
+    Obj3 = riak_object:convert_object_to_headonly(B, K, InObject),
+
     GC0 = #getcore{n= 3, r = 2, pr=0, 
                     fail_threshold = 1, num_ok = 2, num_pok = 0,
                     num_notfound = 0, num_deleted = 0, num_fail = 0,
+                    idx_type = [],
                     results = [{1, {ok, fake_head1}}, {2, {ok, fake_head2}}]},
     GC1 = update_init(1, GC0),
-    GC2 = update_result(3, {ok, fake_head3}, [2], GC1),
-    ?assertMatch(0, GC2#getcore.num_ok),
-    ?assertMatch(1, GC2#getcore.r),
+    GC2 = update_result(3, {ok, Obj3}, [2], GC1),
+    ?assertMatch(3, GC2#getcore.num_ok),
+    ?assertMatch(2, GC2#getcore.r),
+    ?assertMatch(1, GC2#getcore.ur),
+    ?assertMatch(0, GC2#getcore.num_upd),
     ?assertMatch(3, length(GC2#getcore.results)),
     GC3 = update_result(2, {ok, fake_get2}, [2], GC2),
-    ?assertMatch(1, GC3#getcore.num_ok),
-    ?assertMatch(1, GC3#getcore.r),
+    ?assertMatch(3, GC3#getcore.num_ok),
+    ?assertMatch(2, GC3#getcore.r),
+    ?assertMatch(1, GC3#getcore.ur),
+    ?assertMatch(1, GC3#getcore.num_upd),
     ?assertMatch(3, length(GC3#getcore.results)),
-    ?assertMatch([{3, {ok, fake_head3}},
+    ?assertMatch([{3, {ok, Obj3}},
                         {1, {ok, fake_head1}},
                         {2, {ok, fake_get2}}],
                     GC3#getcore.results).
