@@ -409,12 +409,10 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId},
                     % just one
                     NewGC = riak_kv_get_core:update_init(length(IdxList),
                                                             UpdGetCore),
-                    {next_state,
-                        execute,
-                        StateData#state{request_type = update,
-                                        override_nodes = IdxList,
-                                        get_core = NewGC},
-                        0};
+                    execute(timeout,
+                                StateData#state{request_type = update,
+                                                override_nodes = IdxList,
+                                                get_core = NewGC});
                 {_, {Reply, UpdGetCore2}} ->
                     StateWithReply = StateData#state{get_core = UpdGetCore2},
                     NewStateData = client_reply(Reply, StateWithReply),
