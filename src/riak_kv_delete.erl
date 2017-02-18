@@ -259,7 +259,7 @@ failed_sweep(Index, _Acc, Reason) ->
 
 % delete_test_() ->
 %     %% Execute the test cases
-%     io:format(user, "Perfomring delete tests~n", []),
+%     io:format(user, "Performing delete tests~n", []),
 %     {foreach,
 %       setup(),
 %       cleanup(),

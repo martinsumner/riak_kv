@@ -305,11 +305,11 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
                                    override_nodes = OverNodes}) ->
     TRef = schedule_timeout(Timeout),
     Preflist =
-        case OverNodes of
-            {false, _} ->
-                [IndexNode || {IndexNode, _Type} <- Preflist2];
-            {true, IdxList} ->
-                IdxList
+        case RequestType of
+            update ->
+                OverNodes;
+            _ ->
+                [IndexNode || {IndexNode, _Type} <- Preflist2]
         end,
     case Trace of
         true ->
