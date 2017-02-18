@@ -303,14 +303,8 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
                                    get_core = GetCore,
                                    request_type = RequestType,
                                    override_nodes = OverNodes}) ->
+    Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
     TRef = schedule_timeout(Timeout),
-    Preflist =
-        case RequestType of
-            update ->
-                OverNodes;
-            _ ->
-                [IndexNode || {IndexNode, _Type} <- Preflist2]
-        end,
     case Trace of
         true ->
             ?DTRACE(?C_GET_FSM_EXECUTE, [], ["execute"]),
@@ -334,7 +328,6 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
                 % will be used
                 %
                 % Send head requests to all the Preflist
-                Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
                 riak_kv_vnode:head(Preflist, BKey, ReqId),
                 HO_GetCore = riak_kv_get_core:head_merge(GetCore),
                 StateData0#state{tref=TRef, get_core = HO_GetCore};
@@ -342,13 +335,16 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
                 % Need to send get requests, but still merge using head_merge
                 % as there will still be head results in the result list, and
                 % more head results  may arrive from previous HEAD request
-                riak_kv_vnode:get(OverNodes, BKey, ReqId),
+                FetchList = lists:map(fun(Idx) -> 
+                                            lists:keyfind(Idx, 1, Preflist) 
+                                        end, 
+                                        OverNodes),
+                riak_kv_vnode:get(FetchList, BKey, ReqId),
                 HO_GetCore = riak_kv_get_core:head_merge(GetCore),
                 StateData0#state{tref=TRef, get_core = HO_GetCore};
             get ->
                 % Only used if the default is switched back to start with a GET
                 % not a HEAD
-                Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
                 riak_kv_vnode:get(Preflist, BKey, ReqId),
                 StateData0#state{tref=TRef}
         end,
