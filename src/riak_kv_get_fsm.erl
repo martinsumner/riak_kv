@@ -403,7 +403,7 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId},
             % GET request for that vnode)
             case {StateData#state.request_type,
                     riak_kv_get_core:response(UpdGetCore)} of
-                {R, {fetch, IdxList}} when R /= get ->
+                {R, {{fetch, IdxList}, _}} when R /= get ->
                     % Trigger genuine GETs to each vnode index required to
                     % get a merged view of an object.  Hopefully should be
                     % just one
