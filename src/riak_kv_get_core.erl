@@ -165,16 +165,18 @@ result_shortcode(_)                 -> -1.
 %% Met quorum
 enough(#getcore{r = R, ur = UR, pr= PR, 
                     num_ok = NumOK, num_pok = NumPOK, 
-                    num_upd = NumUPD}) when
-      NumOK >= R andalso NumPOK >= PR andalso NumUPD >= UR ->
+                    num_upd = NumUPD}) 
+        when NumOK >= R andalso NumPOK >= PR andalso NumUPD >= UR ->
     true;
 %% too many failures
 enough(#getcore{fail_threshold = FailThreshold, num_notfound = NumNotFound,
-        num_fail = NumFail}) when NumNotFound + NumFail >= FailThreshold ->
+            num_fail = NumFail}) 
+        when NumNotFound + NumFail >= FailThreshold ->
     true;
 %% Got all N responses, but unable to satisfy PR
-enough(#getcore{n = N, num_ok = NumOK, num_notfound = NumNotFound,
-        num_fail = NumFail}) when NumOK + NumNotFound + NumFail >= N ->
+enough(#getcore{n = N, ur = UR, num_ok = NumOK, num_notfound = NumNotFound,
+            num_fail = NumFail}) 
+        when NumOK + NumNotFound + NumFail >= N andalso UR == 0 ->
     true;
 enough(_) ->
     false.
