@@ -2610,7 +2610,6 @@ maybefetch_clock_and_indexdata(Table, BKey, Mod, ModState, IsSearchable) ->
                         {error, not_found, _UpdModState} ->
                             {not_found, undefined};
                         {ok, TheOldObj, _UpdModState} ->
-                            {ok, TheOldObj},
                             VClock = riak_object:vclock(TheOldObj),
                             IndexData = riak_object:index_data(TheOldObj),
                             {VClock, IndexData}
