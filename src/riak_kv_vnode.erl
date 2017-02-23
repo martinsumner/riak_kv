@@ -1548,15 +1548,31 @@ prepare_read_before_write_put(#state{mod = Mod,
                               #putargs{bkey={Bucket, Key}=BKey,
                                        robj=RObj}=PutArgs,
                               IndexBackend, IsSearchable) ->
-    {CacheClock, CacheData} = maybe_check_md_cache(MDCache, BKey),
-
-    RequiresGet = determine_requires_get(CacheClock, RObj, IsSearchable),
-    GetReply = get_old_object_or_fake(RequiresGet, Bucket, Key, Mod, ModState, CacheClock),
+    {CacheClock, CacheData} = maybefetch_clock_and_indexdata(MDCache,
+                                                                BKey,
+                                                                Mod,
+                                                                ModState,
+                                                                IsSearchable),
+    {GetReply, RequiresGet} =
+        case CacheClock of
+            not_found ->
+                {not_found, false};
+            _ ->
+                ReqGet = determine_requires_get(CacheClock,
+                                                    RObj,
+                                                    IsSearchable),
+                {get_old_object_or_fake(ReqGet,
+                                            Bucket, Key,
+                                            Mod, ModState,
+                                            CacheClock),
+                    ReqGet}
+        end,
     case GetReply of
         not_found ->
             prepare_put_new_object(State, PutArgs, IndexBackend);
         {ok, OldObj} ->
-            prepare_put_existing_object(State, PutArgs, OldObj, IndexBackend, CacheData, RequiresGet)
+            prepare_put_existing_object(State, PutArgs, OldObj,
+                                        IndexBackend, CacheData, RequiresGet)
     end.
 
 prepare_put_existing_object(#state{idx =Idx} = State,
@@ -2560,6 +2576,45 @@ maybe_check_md_cache(Table, BKey) ->
                     {undefined, undefined}
             end
     end.
+
+%% Function to return the clock of the object to be updated as well as the
+%% index data.  If the clock is dominated by that of the new object then a
+%% backend GET can be avoided.
+%%
+%% The clock can either come from the cache (which it won't do as this is by
+%% default disabled), or from a head request if the Module has the head
+%% capability.
+%%
+%% Should return {undefined, undefined} if there is no cache to be used or
+%% {not_found, undefined} if the lack of object has been confirmed, or
+%% {VClock, IndexData} if the result is found
+maybefetch_clock_and_indexdata(Table, BKey, Mod, ModState, IsSearchable) ->
+    CacheResult = maybe_check_md_cache(Table, BKey),
+    case CacheResult of
+        {undefined, undefined} ->
+            {ok, Capabilities} = Mod:capabilities(ModState),
+            CanGetHead = maybe_support_head_requests(Capabilities)
+                            andalso (not IsSearchable),
+                % If the bucket is searchable won't use the cache bits anyway
+            case CanGetHead of
+                true ->
+                    {Bucket, Key} = sanitize_bkey(BKey),
+                    case do_head_binary(Bucket, Key, Mod, ModState) of
+                        {error, not_found, _UpdModState} ->
+                            {not_found, undefined};
+                        {ok, TheOldObj, _UpdModState} ->
+                            {ok, TheOldObj},
+                            VClock = riak_object:vclock(TheOldObj),
+                            IndexData = riak_object:index_data(TheOldObj),
+                            {VClock, IndexData}
+                    end;
+                _ ->
+                    CacheResult
+            end;
+        _ ->
+            CacheResult
+    end.
+    
 
 maybe_cache_object(BKey, Obj, #state{md_cache = MDCache,
                                      md_cache_size = MDCacheSize}) ->
