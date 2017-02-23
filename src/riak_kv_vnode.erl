@@ -2609,7 +2609,8 @@ maybefetch_clock_and_indexdata(Table, BKey, Mod, ModState, IsSearchable) ->
                     case do_head_binary(Bucket, Key, Mod, ModState) of
                         {error, not_found, _UpdModState} ->
                             {not_found, undefined};
-                        {ok, TheOldObj, _UpdModState} ->
+                        {ok, OldObjBin, _UpdModState} ->
+                            TheOldObj = riak_object:from_binary(OldObjBin),
                             VClock = riak_object:vclock(TheOldObj),
                             IndexData = riak_object:index_data(TheOldObj),
                             {VClock, IndexData}
