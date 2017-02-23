@@ -45,6 +45,7 @@
 -record(getcore, {n :: pos_integer(),
                   r :: pos_integer(),
                   pr :: pos_integer(),
+                  ur :: non_neg_integer(), % updated reads
                   fail_threshold :: pos_integer(),
                   notfound_ok :: boolean(),
                   allow_mult :: boolean(),
@@ -57,6 +58,7 @@
                   num_notfound = 0 :: non_neg_integer(),
                   num_deleted = 0 :: non_neg_integer(),
                   num_fail = 0 :: non_neg_integer(),
+                  num_upd = 0 :: non_neg_integer(),
                   idx_type :: idx_type(),
                   head_merge = false :: boolean()}).
 -opaque getcore() :: #getcore{}.
@@ -74,6 +76,7 @@ init(N, R, PR, FailThreshold, NotFoundOk, AllowMult, DeletedVClock, IdxType) ->
     #getcore{n = N,
              r = R,
              pr = PR,
+             ur = 0,
              fail_threshold = FailThreshold,
              notfound_ok = NotFoundOk,
              allow_mult = AllowMult,
@@ -83,10 +86,7 @@ init(N, R, PR, FailThreshold, NotFoundOk, AllowMult, DeletedVClock, IdxType) ->
 %% Re-initialise a get to a restricted number of vnodes (that must all respond)
 -spec update_init(N::pos_integer(), getcore()) -> getcore().
 update_init(N, PrevGetCore) ->
-    PrevGetCore#getcore{n = N,
-                        r = N,
-                        pr = 0,
-                        fail_threshold = 0,
+    PrevGetCore#getcore{ur = N,
                         head_merge = true}.       
 
 %% Convert the get so that it is expecting to potentially receive the
@@ -138,12 +138,13 @@ update_result(Idx, Result, IdxList, GetCore) ->
     case lists:member(Idx, IdxList) of
         true ->
             % This results should always be OK
-            UpdResults = lists:keyreplace({Idx, Result},
+            UpdResults = lists:keyreplace(Idx,
                                             1,
-                                            GetCore#getcore.results),
+                                            GetCore#getcore.results,
+                                            {Idx, Result}),
             GetCore#getcore{results = UpdResults,
                                 merged = undefined,
-                                num_ok = GetCore#getcore.num_ok + 1};
+                                num_upd = GetCore#getcore.num_upd + 1};
         false ->
             % This is expected, sent n head requests originally, enough was
             % reached at r/pr - so if have a follow on GET may receive n-r
@@ -151,9 +152,7 @@ update_result(Idx, Result, IdxList, GetCore) ->
             % Add them to the result set - the result set will still be used
             % for read repair.  Will also detect if the last read was actually
             % a more upto date object
-            UpdResults = [{Idx, Result}|GetCore#getcore.results],
-            GetCore#getcore{results = UpdResults,
-                                merges = undefined}
+            add_result(Idx, Result, GetCore)
     end.
 
 
@@ -164,16 +163,20 @@ result_shortcode(_)                 -> -1.
 %% Check if enough results have been added to respond
 -spec enough(getcore()) -> boolean().
 %% Met quorum
-enough(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK}) when
-      NumOK >= R andalso NumPOK >= PR ->
+enough(#getcore{r = R, ur = UR, pr= PR, 
+                    num_ok = NumOK, num_pok = NumPOK, 
+                    num_upd = NumUPD}) 
+        when NumOK >= R andalso NumPOK >= PR andalso NumUPD >= UR ->
     true;
 %% too many failures
 enough(#getcore{fail_threshold = FailThreshold, num_notfound = NumNotFound,
-        num_fail = NumFail}) when NumNotFound + NumFail >= FailThreshold ->
+            num_fail = NumFail}) 
+        when NumNotFound + NumFail >= FailThreshold ->
     true;
 %% Got all N responses, but unable to satisfy PR
-enough(#getcore{n = N, num_ok = NumOK, num_notfound = NumNotFound,
-        num_fail = NumFail}) when NumOK + NumNotFound + NumFail >= N ->
+enough(#getcore{n = N, ur = UR, num_ok = NumOK, num_notfound = NumNotFound,
+            num_fail = NumFail}) 
+        when NumOK + NumNotFound + NumFail >= N andalso UR == 0 ->
     true;
 enough(_) ->
     false.
@@ -296,13 +299,13 @@ determine_final_action([], tombstone, N, Results, MObj) ->
         true ->
             delete;
         _ ->
-            maybe_log_old_vclock(Results),
+            % maybe_log_old_vclock(Results),
             nop
     end;
 determine_final_action([], notfound, _N, _Results, _MObj) ->
     nop;
-determine_final_action([], _ObjState, _N, Results, _MObj) ->
-    maybe_log_old_vclock(Results),
+determine_final_action([], _ObjState, _N, _Results, _MObj) ->
+    % maybe_log_old_vclock(Results),
     nop;
 determine_final_action(ReadRepairs, _N, _ObjState, _Results, MObj) ->
     {read_repair, ReadRepairs, MObj}.
@@ -429,50 +432,63 @@ num_pr(GetCore = #getcore{num_pok=NumPOK, idx_type=IdxType}, Idx) ->
 %% This situation could happen with pre 2.1 vclocks in very rare cases. Fixing the object
 %% requires the user to rewrite the object in 2.1+ of Riak. Logic is enabled when capabilities
 %% returns a version(all nodes at least 2.2) and the entropy_manager is not yet version 0
-maybe_log_old_vclock(Results) ->
-    case riak_core_capability:get({riak_kv, object_hash_version}, legacy) of
-        legacy ->
-            ok;
-        0 ->
-            Version = riak_kv_entropy_manager:get_version(),
-            case [RObj || {_Idx, {ok, RObj}} <- Results] of
-                [] ->
-                    ok;
-                [_] ->
-                    ok;
-                _ when Version == 0 ->
-                    ok;
-                [R1|Rest] ->
-                    case [RObj || RObj <- Rest, not riak_object:equal(R1, RObj)] of
-                        [] ->
-                            ok;
-                        _ ->
-                            object:warning("Bucket: ~p Key: ~p should be rewritten to guarantee
-                              compatability with AAE version 0",
-                                [riak_object:bucket(R1),riak_object:key(R1)])
-                    end
-            end;
-        _ ->
-            ok
-    end.
+% maybe_log_old_vclock(Results) ->
+%     case riak_core_capability:get({riak_kv, object_hash_version}, legacy) of
+%         legacy ->
+%             ok;
+%         0 ->
+%             Version = riak_kv_entropy_manager:get_version(),
+%             case [RObj || {_Idx, {ok, RObj}} <- Results] of
+%                 [] ->
+%                     ok;
+%                 [_] ->
+%                     ok;
+%                 _ when Version == 0 ->
+%                     ok;
+%                 [R1|Rest] ->
+%                     case [RObj || RObj <- Rest, not riak_object:equal(R1, RObj)] of
+%                         [] ->
+%                             ok;
+%                         _ ->
+%                             object:warning("Bucket: ~p Key: ~p should be rewritten to guarantee
+%                               compatability with AAE version 0",
+%                                 [riak_object:bucket(R1),riak_object:key(R1)])
+%                     end
+%             end;
+%         _ ->
+%             ok
+%     end.
 
 -ifdef(TEST).
 
 update_test() ->
+    B = <<"buckets are binaries">>,
+    K = <<"keys are binaries">>,
+    V = <<"Some value">>,
+    InObject = riak_object:new(B, K, V,
+                                dict:from_list([{<<"X-Riak-Val-Encoding">>, 2},
+                                {<<"X-Foo_MetaData">>, "Foo"}])),
+    Obj3 = riak_object:convert_object_to_headonly(B, K, InObject),
+
     GC0 = #getcore{n= 3, r = 2, pr=0, 
                     fail_threshold = 1, num_ok = 2, num_pok = 0,
                     num_notfound = 0, num_deleted = 0, num_fail = 0,
+                    idx_type = [],
                     results = [{1, {ok, fake_head1}}, {2, {ok, fake_head2}}]},
     GC1 = update_init(1, GC0),
-    GC2 = update_result(3, {ok, fake_head3}, [2], GC1),
-    ?assertMatch(0, GC2#getcore.num_ok),
-    ?assertMatch(1, GC2#getcore.r),
+    GC2 = update_result(3, {ok, Obj3}, [2], GC1),
+    ?assertMatch(3, GC2#getcore.num_ok),
+    ?assertMatch(2, GC2#getcore.r),
+    ?assertMatch(1, GC2#getcore.ur),
+    ?assertMatch(0, GC2#getcore.num_upd),
     ?assertMatch(3, length(GC2#getcore.results)),
     GC3 = update_result(2, {ok, fake_get2}, [2], GC2),
-    ?assertMatch(1, GC3#getcore.num_ok),
-    ?assertMatch(1, GC3#getcore.r),
+    ?assertMatch(3, GC3#getcore.num_ok),
+    ?assertMatch(2, GC3#getcore.r),
+    ?assertMatch(1, GC3#getcore.ur),
+    ?assertMatch(1, GC3#getcore.num_upd),
     ?assertMatch(3, length(GC3#getcore.results)),
-    ?assertMatch([{3, {ok, fake_head3}},
+    ?assertMatch([{3, {ok, Obj3}},
                         {1, {ok, fake_head1}},
                         {2, {ok, fake_get2}}],
                     GC3#getcore.results).
@@ -483,25 +499,41 @@ enough_test_() ->
         {"Checking R",
             fun() ->
                     %% cannot meet R
-                    ?assertEqual(false, enough(#getcore{n= 3, r = 3, pr=0,
+                    ?assertEqual(false, enough(#getcore{n= 3, 
+                                r = 3, pr=0, ur=0,
                                 fail_threshold = 1, num_ok = 0, num_pok = 0,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 0})),
-                    ?assertEqual(false, enough(#getcore{n= 3, r = 3, pr=0,
+                    ?assertEqual(false, enough(#getcore{n= 3, 
+                                r = 3, pr=0, ur=0,
                                 fail_threshold = 1, num_ok = 1, num_pok = 0,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 0})),
-                    ?assertEqual(false, enough(#getcore{n= 3, r = 3, pr=0,
+                    ?assertEqual(false, enough(#getcore{n= 3, 
+                                r = 3, pr=0, ur=0,
                                 fail_threshold = 1, num_ok = 2, num_pok = 0,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 0})),
                     %% met R
-                    ?assertEqual(true, enough(#getcore{n= 3, r = 3, pr=0,
+                    ?assertEqual(true, enough(#getcore{n= 3, 
+                                r = 3, pr=0, ur=0,
                                 fail_threshold = 1, num_ok = 3, num_pok = 0,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 0})),
+                    %% met R - missing updated
+                    ?assertEqual(false, enough(#getcore{n= 3, 
+                                r = 3, pr=0, ur=1,
+                                fail_threshold = 1, num_ok = 3, num_pok = 0,
+                                num_notfound = 0, num_deleted = 0, num_upd=0,
+                                num_fail = 0})),
+                    ?assertEqual(true, enough(#getcore{n= 3, 
+                                r = 3, pr=0, ur=1,
+                                fail_threshold = 1, num_ok = 3, num_pok = 0,
+                                num_notfound = 0, num_deleted = 0, num_upd=1,
+                                num_fail = 0})),
                     %% too many failures
-                    ?assertEqual(true, enough(#getcore{n= 3, r = 3, pr=0,
+                    ?assertEqual(true, enough(#getcore{n= 3, 
+                                r = 3, pr=0, ur=0,
                                 fail_threshold = 1, num_ok = 2, num_pok = 0,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 1})),
@@ -510,21 +542,25 @@ enough_test_() ->
         {"Checking PR",
             fun() ->
                     %% cannot meet PR
-                    ?assertEqual(false, enough(#getcore{n= 3, r = 0, pr=3,
+                    ?assertEqual(false, enough(#getcore{n= 3, 
+                                r = 0, pr=3, ur=0,
                                 fail_threshold = 1, num_ok = 1, num_pok = 1,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 0})),
-                    ?assertEqual(false, enough(#getcore{n= 3, r = 0, pr=3,
+                    ?assertEqual(false, enough(#getcore{n= 3, 
+                                r = 0, pr=3, ur=0,
                                 fail_threshold = 1, num_ok = 2, num_pok = 2,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 0})),
                     %% met PR
-                    ?assertEqual(true, enough(#getcore{n= 3, r = 0, pr=3,
+                    ?assertEqual(true, enough(#getcore{n= 3, 
+                                r = 0, pr=3, ur=0,
                                 fail_threshold = 1, num_ok = 3, num_pok = 3,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 0})),
                     %% met R but not PR
-                    ?assertEqual(true, enough(#getcore{n= 3, r = 0, pr=3,
+                    ?assertEqual(true, enough(#getcore{n= 3, 
+                                r = 0, pr=3, ur=0,
                                 fail_threshold = 3, num_ok = 3, num_pok = 2,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 0})),

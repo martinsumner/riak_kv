@@ -100,6 +100,10 @@
 -export([strict_descendant/2]).
 -export([find_bestobject/1]).
 
+-ifdef(TEST).
+-export([convert_object_to_headonly/3]). % Used in unit testing of get_core
+-endif.
+
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
 new({T, B}, K, V) when is_binary(T), is_binary(B), is_binary(K) ->

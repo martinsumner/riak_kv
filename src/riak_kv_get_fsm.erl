@@ -303,14 +303,8 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
                                    get_core = GetCore,
                                    request_type = RequestType,
                                    override_nodes = OverNodes}) ->
+    Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
     TRef = schedule_timeout(Timeout),
-    Preflist =
-        case OverNodes of
-            {false, _} ->
-                [IndexNode || {IndexNode, _Type} <- Preflist2];
-            {true, IdxList} ->
-                IdxList
-        end,
     case Trace of
         true ->
             ?DTRACE(?C_GET_FSM_EXECUTE, [], ["execute"]),
@@ -334,7 +328,6 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
                 % will be used
                 %
                 % Send head requests to all the Preflist
-                Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
                 riak_kv_vnode:head(Preflist, BKey, ReqId),
                 HO_GetCore = riak_kv_get_core:head_merge(GetCore),
                 StateData0#state{tref=TRef, get_core = HO_GetCore};
@@ -342,13 +335,16 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
                 % Need to send get requests, but still merge using head_merge
                 % as there will still be head results in the result list, and
                 % more head results  may arrive from previous HEAD request
-                riak_kv_vnode:get(OverNodes, BKey, ReqId),
+                FetchList = lists:map(fun(Idx) -> 
+                                            lists:keyfind(Idx, 1, Preflist) 
+                                        end, 
+                                        OverNodes),
+                riak_kv_vnode:get(FetchList, BKey, ReqId),
                 HO_GetCore = riak_kv_get_core:head_merge(GetCore),
                 StateData0#state{tref=TRef, get_core = HO_GetCore};
             get ->
                 % Only used if the default is switched back to start with a GET
                 % not a HEAD
-                Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
                 riak_kv_vnode:get(Preflist, BKey, ReqId),
                 StateData0#state{tref=TRef}
         end,
@@ -403,18 +399,16 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId},
             % GET request for that vnode)
             case {StateData#state.request_type,
                     riak_kv_get_core:response(UpdGetCore)} of
-                {R, {fetch, IdxList}} when R /= get ->
+                {R, {{fetch, IdxList}, _}} when R /= get ->
                     % Trigger genuine GETs to each vnode index required to
                     % get a merged view of an object.  Hopefully should be
                     % just one
                     NewGC = riak_kv_get_core:update_init(length(IdxList),
                                                             UpdGetCore),
-                    {next_state,
-                        execute,
-                        StateData#state{request_type = update,
-                                        override_nodes = IdxList,
-                                        get_core = NewGC},
-                        0};
+                    execute(timeout,
+                                StateData#state{request_type = update,
+                                                override_nodes = IdxList,
+                                                get_core = NewGC});
                 {_, {Reply, UpdGetCore2}} ->
                     StateWithReply = StateData#state{get_core = UpdGetCore2},
                     NewStateData = client_reply(Reply, StateWithReply),

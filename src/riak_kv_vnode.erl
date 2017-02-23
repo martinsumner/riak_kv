@@ -1834,28 +1834,35 @@ do_get(_Sender, BKey, ReqID,
     StartTS = os:timestamp(),
     {Retval, ModState1} = do_get_term(BKey, Mod, ModState),
     State1 = State#state{modstate=ModState1},
-    {Retval1, State3} =
-        case Retval of
-            {ok, Obj} ->
-                case riak_kv_util:is_x_expired(Obj) of
-                    true ->
-                         State2 = do_backend_delete(BKey, Obj, tombstone, State1),
-                        {{error, notfound}, State2};
-                    _ ->
-                        maybe_cache_object(BKey, Obj, State1),
-                        {Retval, State1}
-                end;
-            _ ->
-                {Retval, State1}
-        end,
+    {Retval1, State3} = handle_returned_value(BKey, Retval, State1),
     update_vnode_stats(vnode_get, Idx, StartTS),
     {reply, {r, Retval1, Idx, ReqID}, State3}.
 
 %% @private
 do_head(_Sender, BKey, ReqID,
        State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
-    {RetVal, ModState1} = do_head_term(BKey, Mod, ModState),
-    {reply, {r, RetVal, Idx, ReqID}, State#state{modstate=ModState1}}.
+    {Retval, ModState1} = do_head_term(BKey, Mod, ModState),
+    State1 = State#state{modstate=ModState1},
+    {Retval1, State3} = handle_returned_value(BKey, Retval, State1),
+    {reply, {r, Retval1, Idx, ReqID}, State3}.
+
+%% @private 
+%% Function shared between GET and HEAD requests, so should not assume 
+%% presence of conetent value
+handle_returned_value(BKey, Retval, State) ->
+    case Retval of
+        {ok, Obj} ->
+            case riak_kv_util:is_x_expired(Obj) of
+                true ->
+                     State2 = do_backend_delete(BKey, Obj, tombstone, State),
+                    {{error, notfound}, State2};
+                _ ->
+                    maybe_cache_object(BKey, Obj, State),
+                    {Retval, State}
+            end;
+        _ ->
+            {Retval, State}
+    end.
     
 %% @private
 -spec do_get_term({binary(), binary()}, atom(), tuple()) ->
