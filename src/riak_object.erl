@@ -294,7 +294,9 @@ is_head({ok, Obj}) ->
             true;
         _ ->
             false
-    end.
+    end;
+is_head(Obj) ->
+    is_head({ok, Obj}).
 
 %% @private pairwise merge the objects in the list so that a single,
 %% merged riak_object remains that contains all sibling values. Only
