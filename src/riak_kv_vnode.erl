@@ -1795,7 +1795,14 @@ enforce_allow_mult(Obj, BProps) ->
                 Mult ->
                     lager:info("Merge required to resolve siblings before storing"),
                     {MD, V} = select_newest_content(Mult),
-                    riak_object:set_contents(Obj, [{MD, V}])
+                    MergedObj = riak_object:set_contents(Obj, [{MD, V}]),
+                    case riak_object:is_head(MergedObj) of
+                        true ->
+                          lager:error("Merge resulted in head_only object"),
+                          MergedObj;
+                        false ->
+                          MergedObj
+                    end
             end
     end.
 
@@ -1826,6 +1833,15 @@ put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
     %% for our actor than we are then something is amiss, and we need
     %% to mark the actor as dirty for this key
     ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
+    case riak_object:is_head(ResObj) of 
+        true ->
+            CurHead = riak_object:is_head(CurObj),
+            UpdHead = riak_object:is_head(UpdObj),
+            lager:error("syntactic merge resulted in head winning ~w ~w", 
+                        [CurHead, UpdHead]);
+        false ->
+            ok 
+    end,
     case riak_object:equal(ResObj, CurObj) of
         true ->
             {oldobj, CurObj};
