@@ -1785,6 +1785,7 @@ enforce_allow_mult(Obj, BProps) ->
             case riak_object:get_contents(Obj) of
                 [_] -> Obj;
                 Mult ->
+                    lager:info("Merge required to resolve siblings before storing~n"),
                     {MD, V} = select_newest_content(Mult),
                     riak_object:set_contents(Obj, [{MD, V}])
             end
