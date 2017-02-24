@@ -1546,12 +1546,14 @@ prepare_read_before_write_put(#state{mod = Mod,
                                      modstate = ModState,
                                      md_cache = MDCache}=State,
                               #putargs{bkey={Bucket, Key}=BKey,
-                                       robj=RObj}=PutArgs,
+                                       robj=RObj,
+                                       coord=Coord}=PutArgs,
                               IndexBackend, IsSearchable) ->
     {CacheClock, CacheData} = maybefetch_clock_and_indexdata(MDCache,
                                                                 BKey,
                                                                 Mod,
                                                                 ModState,
+                                                                Coord,
                                                                 IsSearchable),
     {GetReply, RequiresGet} =
         case CacheClock of
@@ -1785,7 +1787,7 @@ enforce_allow_mult(Obj, BProps) ->
             case riak_object:get_contents(Obj) of
                 [_] -> Obj;
                 Mult ->
-                    lager:info("Merge required to resolve siblings before storing~n"),
+                    lager:info("Merge required to resolve siblings before storing"),
                     {MD, V} = select_newest_content(Mult),
                     riak_object:set_contents(Obj, [{MD, V}])
             end
@@ -1849,13 +1851,13 @@ do_head(_Sender, BKey, ReqID,
 
 %% @private 
 %% Function shared between GET and HEAD requests, so should not assume 
-%% presence of conetent value
+%% presence of content value
 handle_returned_value(BKey, Retval, State) ->
     case Retval of
         {ok, Obj} ->
             case riak_kv_util:is_x_expired(Obj) of
                 true ->
-                     State2 = do_backend_delete(BKey, Obj, tombstone, State),
+                    State2 = do_backend_delete(BKey, Obj, tombstone, State),
                     {{error, notfound}, State2};
                 _ ->
                     maybe_cache_object(BKey, Obj, State),
@@ -2596,13 +2598,14 @@ maybe_check_md_cache(Table, BKey) ->
 %% Should return {undefined, undefined} if there is no cache to be used or
 %% {not_found, undefined} if the lack of object has been confirmed, or
 %% {VClock, IndexData} if the result is found
-maybefetch_clock_and_indexdata(Table, BKey, Mod, ModState, IsSearchable) ->
+maybefetch_clock_and_indexdata(Table, BKey, Mod, ModState, Coord, IsSearchable) ->
     CacheResult = maybe_check_md_cache(Table, BKey),
     case CacheResult of
         {undefined, undefined} ->
             {ok, Capabilities} = Mod:capabilities(ModState),
             CanGetHead = maybe_support_head_requests(Capabilities)
-                            andalso (not IsSearchable),
+                            andalso (not IsSearchable)
+                            andalso (not Coord),
                 % If the bucket is searchable won't use the cache bits anyway
             case CanGetHead of
                 true ->
