@@ -95,7 +95,7 @@
 -export([index_specs/1, diff_index_specs/2]).
 -export([to_binary/2, from_binary/3, to_binary_version/4, binary_version/1]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
--export([is_robject/1]).
+-export([is_robject/1, is_head/1]).
 -export([update_last_modified/1, update_last_modified/2, get_last_modified/1]).
 -export([strict_descendant/2]).
 -export([find_bestobject/1]).
