@@ -1563,6 +1563,12 @@ prepare_read_before_write_put(#state{mod = Mod,
                 ReqGet = determine_requires_get(CacheClock,
                                                     RObj,
                                                     IsSearchable),
+                case {ReqGet, Coord} of
+                    {true, false} ->
+                      lager:info("Requires get in put that is not coord");
+                    _ ->
+                      ok 
+                end,
                 {get_old_object_or_fake(ReqGet,
                                             Bucket, Key,
                                             Mod, ModState,
@@ -1674,10 +1680,11 @@ determine_requires_get(CacheClock, RObj, IsSearchable) ->
         Clock ->
             %% We need to perform a local get, to merge contents,
             %% if the local object has events unseen by the
-            %% incoming object. If the incoming object descends
+            %% incoming object. If the incoming object dominates
             %% the cache (i.e. has seen all its events) no need to
             %% do a local get and merge, just overwrite.
-            not riak_object:vclock_descends(RObj, Clock) orelse IsSearchable
+            not vclock:dominates(riak_object:vclock(RObj), Clock) 
+                orelse IsSearchable
     end,
     RequiresGet.
 
