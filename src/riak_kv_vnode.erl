@@ -1563,12 +1563,6 @@ prepare_read_before_write_put(#state{mod = Mod,
                 ReqGet = determine_requires_get(CacheClock,
                                                     RObj,
                                                     IsSearchable),
-                case {ReqGet, Coord} of
-                    {true, false} ->
-                      lager:info("Requires get in put that is not coord");
-                    _ ->
-                      ok 
-                end,
                 {get_old_object_or_fake(ReqGet,
                                             Bucket, Key,
                                             Mod, ModState,
@@ -1598,18 +1592,6 @@ prepare_put_existing_object(#state{idx =Idx} = State,
             {{false, {OldObj, no_old_object}}, PutArgs, State2};
         {newobj, NewObj} ->
             AMObj = enforce_allow_mult(NewObj, BProps),
-            case riak_object:is_head(AMObj) of 
-              true ->
-                Descends = vclock:descends(riak_object:vclock(RObj), 
-                                            riak_object:vclock(OldObj)),
-                Dominates = vclock:dominates(riak_object:vclock(RObj), 
-                                              riak_object:vclock(OldObj)),
-                SibCount = length(riak_object:get_contents(NewObj)),
-                lager:error("Trying to store a fake object ~w ~w ~w ~w", 
-                              [Coord, Descends, Dominates, SibCount]);
-              false ->
-                ok
-            end,
             IndexSpecs = get_index_specs(IndexBackend, CacheData, RequiresGet, AMObj, OldObj),
             ObjToStore0 = maybe_prune_vclock(PruneTime, AMObj, BProps),
             ObjectToStore = maybe_do_crdt_update(Coord, CRDTOp, ActorId, ObjToStore0),
@@ -1806,7 +1788,6 @@ enforce_allow_mult(Obj, BProps) ->
             case riak_object:get_contents(Obj) of
                 [_] -> Obj;
                 Mult ->
-                    lager:info("Merge required to resolve siblings before storing"),
                     {MD, V} = select_newest_content(Mult),
                     MergedObj = riak_object:set_contents(Obj, [{MD, V}]),
                     case riak_object:is_head(MergedObj) of
@@ -1846,15 +1827,6 @@ put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
     %% for our actor than we are then something is amiss, and we need
     %% to mark the actor as dirty for this key
     ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
-    case riak_object:is_head(ResObj) of 
-        true ->
-            CurHead = riak_object:is_head(CurObj),
-            UpdHead = riak_object:is_head(UpdObj),
-            lager:error("syntactic merge resulted in head winning ~w ~w", 
-                        [CurHead, UpdHead]);
-        false ->
-            ok 
-    end,
     case riak_object:equal(ResObj, CurObj) of
         true ->
             {oldobj, CurObj};
