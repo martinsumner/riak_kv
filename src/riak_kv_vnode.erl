@@ -1592,6 +1592,12 @@ prepare_put_existing_object(#state{idx =Idx} = State,
             {{false, {OldObj, no_old_object}}, PutArgs, State2};
         {newobj, NewObj} ->
             AMObj = enforce_allow_mult(NewObj, BProps),
+            case is_head(AMObj) of 
+              true ->
+                lager:error("What the fuck - trying to store a fake object");
+              false ->
+                ok
+            end,
             IndexSpecs = get_index_specs(IndexBackend, CacheData, RequiresGet, AMObj, OldObj),
             ObjToStore0 = maybe_prune_vclock(PruneTime, AMObj, BProps),
             ObjectToStore = maybe_do_crdt_update(Coord, CRDTOp, ActorId, ObjToStore0),
