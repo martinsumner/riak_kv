@@ -1594,7 +1594,13 @@ prepare_put_existing_object(#state{idx =Idx} = State,
             AMObj = enforce_allow_mult(NewObj, BProps),
             case riak_object:is_head(AMObj) of 
               true ->
-                lager:error("What the fuck - trying to store a fake object");
+                Descends = vclock:descends(riak_object:vclock(RObj), 
+                                            riak_object:vclock(OldObj)),
+                Dominates = vclock:dominates(riak_object:vclock(RObj), 
+                                              riak_object:vclock(OldObj)),
+                SibCount = length(riak_object:get_contents(NewObj)),
+                lager:error("Trying to store a fake object ~w ~w ~w ~w", 
+                              [Coord, Descends, Dominates, SibCount]);
               false ->
                 ok
             end,
