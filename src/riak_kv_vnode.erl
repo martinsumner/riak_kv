@@ -1796,8 +1796,8 @@ select_newest_content(Mult) ->
     hd(lists:sort(
          fun({MD0, _}, {MD1, _}) ->
                  riak_core_util:compare_dates(
-                   dict:fetch(<<"X-Riak-Last-Modified">>, MD0),
-                   dict:fetch(<<"X-Riak-Last-Modified">>, MD1))
+                   riak_object:get_last_modified(MD0),
+                   riak_object:get_last_modified(MD1))
          end,
          Mult)).
 

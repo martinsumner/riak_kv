@@ -96,7 +96,7 @@
 -export([to_binary/2, from_binary/3, to_binary_version/4, binary_version/1]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 -export([is_robject/1]).
--export([update_last_modified/1, update_last_modified/2]).
+-export([update_last_modified/1, update_last_modified/2, get_last_modified/1]).
 -export([strict_descendant/2]).
 -export([find_bestobject/1]).
 
@@ -1227,6 +1227,15 @@ update_last_modified(RObj, TS) ->
     NewMD = dict:store(?MD_VTAG, riak_kv_util:make_vtag(TS),
                        dict:store(?MD_LASTMOD, TS, MD0)),
     riak_object:update_metadata(RObj, NewMD).
+
+%% Get the last modified date from the metadata
+get_last_modified(MD) ->
+    case dict:find(?MD_LASTMOD, MD) of 
+        error ->
+            {0, 0, 0};
+        {ok, TS} ->
+            TS
+    end.
 
 %%
 %% Helpers for managing vector clock encoding and related capability:
