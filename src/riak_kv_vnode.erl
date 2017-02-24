@@ -1592,7 +1592,7 @@ prepare_put_existing_object(#state{idx =Idx} = State,
             {{false, {OldObj, no_old_object}}, PutArgs, State2};
         {newobj, NewObj} ->
             AMObj = enforce_allow_mult(NewObj, BProps),
-            case is_head(AMObj) of 
+            case riak_object:is_head(AMObj) of 
               true ->
                 lager:error("What the fuck - trying to store a fake object");
               false ->
