@@ -1615,8 +1615,9 @@ get_index_specs(_IndexedBackend=true, CacheData, RequiresGet, NewObj, OldObj) ->
          RequiresGet == false of
         true ->
             NewData = riak_object:index_data(NewObj),
-            riak_object:diff_index_data(NewData,
-                                        CacheData);
+            % Note diff_index_data and diff_index_specs take inputs in reverse!
+            riak_object:diff_index_data(CacheData,
+                                        NewData);
         false ->
             riak_object:diff_index_specs(NewObj,
                                          OldObj)
