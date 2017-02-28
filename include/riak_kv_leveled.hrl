@@ -9,4 +9,5 @@
 -define(LEVELED_JC_VALID_HOURS, [4, 5, 6]).
 -define(LEVELED_JC_CHECK_INTERVAL, timer:minutes(10)).
 -define(LEVELED_JC_CHECK_JITTER, 0.3).
+-define(LEVELED_DATAROOT, "/data/leveled").
 

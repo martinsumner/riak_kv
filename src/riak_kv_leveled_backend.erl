@@ -80,8 +80,8 @@ capabilities(_, _) ->
 %% @doc Start the hanoidb backend
 -spec start(integer(), list()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
-    %% Get the data root directory
-    DataRoot = "/data/leveled",
+    %% Get the data root directory - cuttlefish not working
+    DataRoot = ?LEVELED_DATAROOT,
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
             case leveled_bookie:book_start(DataDir, 
