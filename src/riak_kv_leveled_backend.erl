@@ -36,6 +36,7 @@
 
 
 -include("riak_kv_index.hrl").
+-include("riak_kv_leveled.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -48,9 +49,6 @@
                         hash_query, 
                         putfsm_pause]).
 -define(API_VERSION, 1).
--define(JC_CHECK_INTERVAL, timer:minutes(10)).
--define(JC_CHECK_JITTER, 0.3).
--define(JC_VALID_HOURS, [6]).
 
 -record(state, {bookie :: pid(),
                 reference :: reference(),
@@ -87,9 +85,9 @@ start(Partition, Config) ->
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
             case leveled_bookie:book_start(DataDir, 
-                                            2000, 
-                                            500000000, 
-                                            riak_sync) of
+                                            ?LEVELED_LEDGERCACHE, 
+                                            ?LEVELED_JOURNALSIZE, 
+                                            ?LEVELED_SYNCSTRATEGY) of
                 {ok, Bookie} ->
                     Ref = make_ref(),
                     schedule_journalcompaction(Ref),
@@ -319,10 +317,10 @@ get_data_dir(DataRoot, Partition) ->
 schedule_journalcompaction(Ref) when is_reference(Ref) ->
     Interval = app_helper:get_env(riak_kv,
                                     leveled_jc_check_interval,
-                                    ?JC_CHECK_INTERVAL),
+                                    ?LEVELED_JC_CHECK_INTERVAL),
     JitterPerc = app_helper:get_env(riak_kv,
                                     leveled_jc_check_jitter,
-                                    ?JC_CHECK_JITTER),
+                                    ?LEVELED_JC_CHECK_JITTER),
     Jitter = Interval * JitterPerc,
     FinalInterval = Interval + trunc(2 * random:uniform() * Jitter - Jitter),
     lager:debug("Scheduling Leveled journal compaction check in ~pms",
@@ -334,7 +332,7 @@ schedule_journalcompaction(Ref) when is_reference(Ref) ->
 prompt_journalcompaction(Bookie, Ref) when is_reference(Ref) ->
     ValidHours = app_helper:get_env(riak_kv,
                                     leveled_jc_valid_hours,
-                                    ?JC_VALID_HOURS),
+                                    ?LEVELED_JC_VALID_HOURS),
     {{_Yr, _Mth, _Day}, {Hr, _Min, _Sec}} = calendar:local_time(),
     case lists:member(Hr, ValidHours) of
         true ->
