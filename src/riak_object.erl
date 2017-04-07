@@ -706,13 +706,13 @@ get_metadatas(#r_object{contents=Contents}) ->
 %% @doc  Return a list of object values for this riak_object.
 %%       If the object is a proxy will need to fetch the actual object
 -spec get_values(riak_object()) -> [value()].
-get_values(#r_object{contents=C, is_proxy=IsP, proxy = P}) ->
+get_values(RObj=#r_object{contents=C, is_proxy = IsP, proxy = P}) ->
     case IsP of
         true ->
             {FetchFun, Pid, FetchKey} = P,
             ObjBin = FetchFun(Pid, FetchKey),
-            RObj = from_binary(ObjBin),
-            get_values(RObj);
+            R0 = from_binary(RObj#r_object.bucket, RObj#r_object.key, ObjBin),
+            get_values(R0#r_object{is_proxy = false});
         false ->
             [Content#r_content.value || Content <- C]
     end.
@@ -722,16 +722,16 @@ get_values(#r_object{contents=C, is_proxy=IsP, proxy = P}) ->
 %%       has siblings (value_count() > 1).
 %%       If the object is a proxy will need to fetch the actual object.
 -spec get_value(riak_object()) -> value().
-get_value(Object=#r_object{}) ->
+get_value(RObj=#r_object{is_proxy = IsP, proxy = P}) ->
     % this blows up intentionally (badmatch) if more than one content value!
     case IsP of
         true ->
             {FetchFun, Pid, FetchKey} = P,
             ObjBin = FetchFun(Pid, FetchKey),
-            RObj = from_binary(ObjBin),
-            get_value(RObj);
+            R0 = from_binary(RObj#r_object.bucket, RObj#r_object.key, ObjBin),
+            get_values(R0#r_object{is_proxy = false});
         false ->
-            [{_M,Value}] = get_contents(Object),
+            [{_M,Value}] = get_contents(RObj),
             Value
     end.
 
@@ -1076,9 +1076,8 @@ from_binary(B, K, <<131, _Rest/binary>>=ObjTerm) ->
                             size = ObjSize};   
         T ->
             T
-    end.
-
-from_binary(B,K,<<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
+    end;
+from_binary(B, K, <<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
     %% Version 1 of binary riak object
     case Rest of
         <<VclockLen:32/integer, VclockBin:VclockLen/binary, SibCount:32/integer, SibsBin/binary>> ->
