@@ -63,7 +63,12 @@
          acc :: any(),
          options = [] :: list(),    %% optional values that will be added during sweep
          errors = 0 :: integer(),
-         fail_reason
+         fail_reason,
+         force_foldobject = false :: boolean()
+                                    %% force the sweep to always fetch the
+                                    %% full object rather than a proxy
+                                    %% This prevents fold_heads being used as
+                                    %% an alternative to fold_objects
         }).
 
 %% Sweep accumulator
@@ -136,10 +141,53 @@ get_active_participants(Participants, Index) ->
      Sender :: opaque(),
      VnodeState :: opaque()}.
 
+
+check_for_forcefoldobject(ActiveParticipants) ->
+    FoldFun =
+        fun(AP, Status) ->
+            case Status of
+                true ->
+                    true;
+                false ->
+                    AP#sweep_participant.force_foldobject
+            end
+        end,
+    lists:foldl(FoldFun, false, ActiveParticipants).
+
 do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index,
          Mod, ModState, VnodeState) ->
     InitialAcc = make_initial_acc(Index, ActiveParticipants, EstimatedKeys),
-    case Mod:fold_objects(fun fold_req_fun/4, InitialAcc, Opts, ModState) of
+    
+    % Add capabilities check
+    % If capabilites exist can use fold_heads not fold_objects
+    %
+    % Maybe it should be possible for participant to force fold_objects if
+    % the participant knows it will always need the value?
+    %
+    % The forcing of fold_objects would have the advantage of avoiding the
+    % double fetch if more than one participant calls riak_object:get_value(s)
+    
+    FoldFun = 
+        case check_for_forcefoldobject(ActiveParticipants) of
+            true ->
+                fun Mod:fold_objects/4;
+            false ->
+                {ok, Cs} = Mod:capabilities(ModState),
+                MaybeFH =
+                    lists:member(fold_heads, Cs)
+                        and lists:member(direct_fetch, Cs),
+                case MaybeFH of
+                    true ->
+                        lager:info("Folding heads for sweep with " ++
+                                        "~w participants",
+                                    [length(ActiveParticipants)]),
+                        fun Mod:fold_heads/4;
+                    false ->
+                        fun Mod:fold_objects/4
+                end
+        end,
+    
+    case FoldFun(fun fold_req_fun/4, InitialAcc, Opts, ModState) of
         {ok, #sa{} = Acc} ->
             FinishFun = finish_sweep_fun(Index),
             {reply, FinishFun(Acc), VnodeState};
@@ -173,6 +221,17 @@ fold_req_fun(_Bucket, _Key, _RObjBin,
 
 fold_req_fun(Bucket, Key, RObjBin,
              #sa{index = Index, swept_keys = SweptKeys} = Acc) ->
+    
+    % maybe_throttle_sweep only uses RObjBin from a size perspective
+    % If the fold is using fold_heads not fold_objects, then this will be the
+    % size of the metadata not the full object.
+    %
+    % It seems possibly right for this to be the metadata size as presumably
+    % the throttle is trying to control the pace of reading off disk, and in
+    % this case this represents that pace
+    %
+    % This will not be representative if the participants go and fetch the
+    % value though.
     Acc1 = maybe_throttle_sweep(RObjBin, Acc),
     Acc3 =
         case is_receive_request(SweptKeys) of
@@ -183,11 +242,27 @@ fold_req_fun(Bucket, Key, RObjBin,
             false ->
                 Acc1
         end,
+    
+    % From binary should cope with a proxy object
+    % This process should happen before maybe_throttle_sweep call if the real
+    % object size is always to be used in the throttle
     RObj = riak_object:from_binary(Bucket, Key, RObjBin),
+    % Use the actual object size here, this should be carried by the proxy
+    % object if it is a proxy, if not a proxy then byte_size the binary
+    % This size is used in the stats not the throttle, so the actual value be
+    % used
+    Size =
+        case riak_object:proxy_size(RObj) of
+            0 ->
+                byte_size(RObjBin);
+            S ->
+                S
+        end,
+    
     {NumMutated, NumDeleted, Acc4} =
         apply_sweep_participant_funs({{Bucket, Key}, RObj},
                                      Acc3#sa{swept_keys = SweptKeys + 1}),
-    update_stat_counters(NumMutated, NumDeleted, byte_size(RObjBin), Acc4).
+    update_stat_counters(NumMutated, NumDeleted, Size, Acc4).
 
 -spec make_initial_acc(riak_kv_sweeper:index(),
                        [#sweep_participant{}],
