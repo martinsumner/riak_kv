@@ -23,7 +23,6 @@
          start/2,
          stop/1,
          get/3,
-         head/3,
          put/5,
          delete/4,
          drop/1,
@@ -34,6 +33,10 @@
          status/1,
          data_size/1,
          callback/3]).
+
+%% Extended KV Backend API
+-export([head/3,
+            fold_heads/4]).
 
 
 -include("riak_kv_index.hrl").
@@ -47,7 +50,8 @@
 -define(CAPABILITIES, [async_fold, 
                         indexes,
                         head, 
-                        hash_query, 
+                        fold_heads,
+                        direct_fetch,
                         putfsm_pause]).
 -define(API_VERSION, 1).
 
@@ -260,6 +264,35 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
         false ->
             {ok, ObjectFolder()}
     end.
+
+%% @doc Fold over all the heads for one or all buckets.
+%% Works as with fold_objects only the fun() will return
+%% FoldHeadsFun(B, K, ProxyValue, Acc) not FoldObjectsFun(B, K, V, Acc)
+%% ProxyValue may be an actual object, but will actually be a tuple of the
+%% form {proxy_object, HeadBinary, Size, {FetchFun, Clone, FetchKey}} with the
+%% expectation that the only the HeadBinary and Size is required, but if the
+%% #r_content.value is required the whole original object can be fetched using
+%% FetchFun(Clone, FetchKey), as long as the fold function has not finished
+-spec fold_heads(riak_kv_backend:fold_objects_fun(),
+                   any(),
+                   [{atom(), term()}],
+                   state()) -> {ok, any()} | {async, fun()}.
+fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
+    Query =
+        case proplists:get_value(bucket, Opts) of
+            undefined ->
+                {foldheads_allkeys, ?RIAK_TAG, {FoldHeadsFun, Acc}};
+            B ->
+                {foldheads_bybucket, ?RIAK_TAG, B, {FoldHeadsFun, Acc}}
+        end,
+    {async, HeadFolder} = leveled_bookie:book_returnfolder(Bookie, Query),
+    case proplists:get_bool(async_fold, Opts) of
+        true ->
+            {async, HeadFolder};
+        false ->
+            {ok, HeadFolder()}
+    end.
+
 
 %% @doc Delete all objects from this leveled backend
 -spec drop(state()) -> {ok, state()} | {error, term(), state()}.
