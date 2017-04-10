@@ -1844,4 +1844,74 @@ verify_contents([{MD, V} | Rest], [{{Actor, Count}, V} | Rest2]) ->
     verify_contents(Rest, Rest2).
 
 
+head_binary(VC1) ->
+    MetaBin = 
+        <<0:32/integer, 
+            0:32/integer, 
+            0:32/integer, 
+            0:8/integer, 
+            <<1>>:1/binary>>,
+
+    MetaSize = byte_size(MetaBin),
+    SibsBin = 
+        <<0:32/integer, MetaSize:32/integer, MetaBin/binary, 
+            0:32/integer, MetaSize:32/integer, MetaBin/binary>>, 
+    VclockLen = byte_size(VC1),
+    
+    RObjBin = 
+        <<?MAGIC:8/integer, ?V1_VERS:8/integer,
+            VclockLen:32/integer, VC1/binary,
+            2:32/integer, SibsBin/binary>>,
+    RObjBin.
+
+
+from_binary_headonly_test() ->
+    % Confirm that from_binary works as expected for a response to a head 
+    % request, which will have no r_content.value
+    Bucket = <<"B">>,
+    Key = <<"K1">>,
+    VC1 = term_to_binary(vclock:fresh(a, 3)),
+    RObjBin = head_binary(VC1),
+
+    RObj = riak_object:from_binary(Bucket, Key, RObjBin),
+    ?assertMatch(true, is_robject(RObj)),
+    ?assertMatch(VC1, term_to_binary(riak_object:vclock(RObj))),
+    ?assertMatch(true, is_head(RObj)).
+
+
+fetch_value(clone, "JournalKey") ->
+    term_to_binary(#r_object{contents = [#r_content{value = "V1"}]}).
+
+from_binary_foldheads_test() ->
+    % the response to fold_heads request will be a head binary, but 
+    % wrapped up in a tuple 
+    Bucket = <<"B">>,
+    Key = <<"K1">>,
+    VC1 = term_to_binary(vclock:fresh(a, 3)),
+    MDBin = head_binary(VC1),
+    HeadObj = 
+        term_to_binary(
+            {proxy_object, MDBin, 100, 
+                {fun fetch_value/2, clone, "JournalKey"}}),
+
+    RObj = riak_object:from_binary(Bucket, Key, HeadObj),
+    ?assertMatch(true, is_robject(RObj)),
+    ?assertMatch(VC1, term_to_binary(riak_object:vclock(RObj))),
+    ?assertMatch(true, is_head(RObj)),
+    ?assertMatch(["V1"], get_value(RObj)).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 -endif.
