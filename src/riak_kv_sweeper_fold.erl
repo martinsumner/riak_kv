@@ -186,7 +186,7 @@ do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index,
                         fun Mod:fold_objects/4
                 end
         end,
-    
+    lager:info("Commencing sweeper fold for participants ~w", [ActiveParticipants]),
     case FoldFun(fun fold_req_fun/4, InitialAcc, Opts, ModState) of
         {ok, #sa{} = Acc} ->
             FinishFun = finish_sweep_fun(Index),
