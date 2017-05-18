@@ -95,7 +95,7 @@ start(Partition, Config) ->
                                             ?LEVELED_SYNCSTRATEGY) of
                 {ok, Bookie} ->
                     Ref = make_ref(),
-                    schedule_journalcompaction(Ref),
+                    schedule_journalcompaction(Ref, Partition),
                     {ok, #state{bookie=Bookie,
                                 reference=Ref,
                                 partition=Partition,
@@ -339,7 +339,9 @@ data_size(_State) ->
 callback(Ref, compact_journal, State) ->
     case is_reference(Ref) of 
         true ->
-             prompt_journalcompaction(State#state.bookie, Ref),
+             prompt_journalcompaction(State#state.bookie,
+                                        Ref,
+                                        State#state.partition),
              {ok, State}
     end. 
 
@@ -362,22 +364,26 @@ get_data_dir(DataRoot, Partition) ->
 
 %% @private
 %% Request a callback in the future to check for journal compaction
-schedule_journalcompaction(Ref) when is_reference(Ref) ->
-    Interval = app_helper:get_env(riak_kv,
-                                    leveled_jc_check_interval,
-                                    ?LEVELED_JC_CHECK_INTERVAL),
-    JitterPerc = app_helper:get_env(riak_kv,
-                                    leveled_jc_check_jitter,
-                                    ?LEVELED_JC_CHECK_JITTER),
-    Jitter = Interval * JitterPerc,
-    FinalInterval = Interval + trunc(2 * random:uniform() * Jitter - Jitter),
-    lager:debug("Scheduling Leveled journal compaction check in ~pms",
-                    [FinalInterval]),
-    riak_kv_backend:callback_after(FinalInterval, Ref, compact_journal).
+schedule_journalcompaction(Ref, PartitionID) when is_reference(Ref) ->
+    ValidHours = app_helper:get_env(riak_kv,
+                                    leveled_jc_valid_hours,
+                                    ?LEVELED_JC_VALID_HOURS),
+    PerDay = app_helper:get_env(riak_kv,
+                                    leveled_jc_compactions_perday,
+                                    ?LEVELED_JC_COMPACTIONS_PERDAY),
+    random:seed(erlang:monotonic_time(), erlang:phash2(self()), PartitionID),
+    Interval = leveled_iclerk:schedule_compaction(ValidHours,
+                                                    PerDay,
+                                                    os:timestamp()),
+    lager:info("Schedule compaction for interval ~w on partition ~w",
+                    [Interval, PartitionID]),
+    riak_kv_backend:callback_after(Interval * 1000, % callback interval in ms
+                                    Ref,
+                                    compact_journal).
 
 %% @private
-%% Do journal compaciton if the callback is in a valid time period
-prompt_journalcompaction(Bookie, Ref) when is_reference(Ref) ->
+%% Do journal compaction if the callback is in a valid time period
+prompt_journalcompaction(Bookie, Ref, PartitionID) when is_reference(Ref) ->
     ValidHours = app_helper:get_env(riak_kv,
                                     leveled_jc_valid_hours,
                                     ?LEVELED_JC_VALID_HOURS),
@@ -393,7 +399,7 @@ prompt_journalcompaction(Bookie, Ref) when is_reference(Ref) ->
         false ->
             ok
     end,
-    schedule_journalcompaction(Ref).
+    schedule_journalcompaction(Ref, PartitionID).
 
     
 
