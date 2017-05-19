@@ -371,7 +371,7 @@ schedule_journalcompaction(Ref, PartitionID) when is_reference(Ref) ->
     PerDay = app_helper:get_env(riak_kv,
                                     leveled_jc_compactions_perday,
                                     ?LEVELED_JC_COMPACTIONS_PERDAY),
-    random:seed(os:timestamp()), erlang:phash2(self()), PartitionID),
+    random:seed(os:timestamp(), erlang:phash2(self()), PartitionID),
     Interval = leveled_iclerk:schedule_compaction(ValidHours,
                                                     PerDay,
                                                     os:timestamp()),
