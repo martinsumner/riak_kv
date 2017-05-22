@@ -29,7 +29,11 @@
 -endif.
 -include("riak_kv_wm_raw.hrl").
 
--export([start_link/6, start_link/7, start_link/8, delete/8]).
+-behavior(riak_kv_sweeper).
+
+-export([start_link/6, start_link/7, start_link/8, delete/8, obj_outside_grace_period/1,
+         create_tombstone/3]).
+-export([participate_in_sweep/2, successful_sweep/2, failed_sweep/3]).
 
 -include("riak_kv_dtrace.hrl").
 
@@ -80,9 +84,7 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
             ?DTRACE(?C_DELETE_INIT2, [-1], []),
             Client ! {ReqId, {error, Reason}};
         {W, PW, DW, PassThruOptions} ->
-            Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(?MD_DELETED,
-                                                                 "true", dict:new())),
-            Tombstone = riak_object:set_vclock(Obj0, VClock),
+            Tombstone = create_tombstone(Bucket, Key, VClock),
             {ok,C} = riak:local_client(ClientId),
             Reply = C:put(Tombstone, [{w,W},{pw,PW},{dw, DW},{timeout,Timeout}]++PassThruOptions),
             Client ! {ReqId, Reply},
@@ -100,6 +102,14 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
                     nop
             end
     end.
+
+create_tombstone(Bucket, Key, VClock) ->
+    Obj0 =
+        riak_object:new(Bucket, Key, <<>>,
+                        dict:store(?MD_DELETED,
+                                   "true", dict:new())),
+    riak_object:set_vclock(Obj0, VClock).
+
 
 get_r_options(Bucket, Options) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
@@ -189,129 +199,178 @@ get_w_options(Bucket, Options) ->
 %%       these values but a 2-tuple list, namely, 'sloppy_quorum'
 %%       cannot appear as a proplist-style property but must always
 %%       appear as {sloppy_quorum, boolean()}.
-
 extract_passthru_options(Options) ->
     [Opt || {K, _} = Opt <- Options,
             K == sloppy_quorum orelse K == n_val].
+
+
+%% riak_kv_sweeper callbacks
+participate_in_sweep(Index, _Pid) ->
+    InitialAcc = 0,
+    {ok, reap_fun(Index), InitialAcc}.
+
+reap_fun(Index) ->
+    fun({_BKey, RObj}, Acc, _Opt) ->
+            case riak_kv_util:obj_not_deleted(RObj) of
+                undefined ->
+                    maybe_reap(RObj, Index, Acc);
+                _ ->
+                    {ok, Acc}
+            end
+    end.
+
+maybe_reap(RObj, Index, Acc) ->
+    case obj_outside_grace_period(RObj) of
+        true ->
+            riak_kv_stat:update({reap_tombstone, Index}),
+            {deleted, Acc};
+        false ->
+            {ok, Acc}
+    end.
+
+obj_outside_grace_period(RObj) ->
+    obj_outside_grace_period(RObj, app_helper:get_env(riak_kv, tombstone_grace_period)).
+obj_outside_grace_period(_RObj, disabled) ->
+    false;
+obj_outside_grace_period(RObj, TombstoneGracePeriod) ->
+    Now = os:timestamp(),
+
+    Contents = riak_object:get_contents(RObj),
+
+    lists:all(fun(Content) -> not content_in_grace(Content, Now, TombstoneGracePeriod) end,
+              Contents).
+
+content_in_grace({MetaData, _Value}, Now, TombstoneGracePeriod) ->
+    LastMod = dict:fetch(?MD_LASTMOD, MetaData),
+    timer:now_diff(Now, LastMod) div 1000000 < TombstoneGracePeriod.
+
+successful_sweep(Index, _FinalAcc) ->
+    lager:info("successful_sweep ~p", [Index]),
+    ok.
+
+failed_sweep(Index, _Acc, Reason) ->
+    lager:info("failed_sweep ~p ~p", [Index, Reason]),
+    ok.
 
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
 -ifdef(TEST).
 
-delete_test_() ->
-    %% Execute the test cases
-    {foreach,
-      setup(),
-      cleanup(),
-      [
-          fun invalid_r_delete/0,
-          fun invalid_rw_delete/0,
-          fun invalid_w_delete/0,
-          fun invalid_pr_delete/0,
-          fun invalid_pw_delete/0
-      ]
-  }.
+% delete_test_() ->
+%     %% Execute the test cases
+%     io:format(user, "Performing delete tests~n", []),
+%     {foreach,
+%       setup(),
+%       cleanup(),
+%       [
+%           fun invalid_r_delete/0,
+%           fun invalid_rw_delete/0,
+%           fun invalid_w_delete/0,
+%           fun invalid_pr_delete/0,
+%           fun invalid_pw_delete/0
+%       ]
+%   }.
 
-invalid_rw_delete() ->
-    RW = <<"abc">>,
-    %% Start the gen_fsm process
-    RequestId = erlang:phash2(erlang:now()),
-    Bucket = <<"testbucket">>,
-    Key = <<"testkey">>,
-    Timeout = 60000,
-    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{rw,RW}], Timeout, self()]),
-    %% Wait for error response
-    receive
-        {_RequestId, Result} ->
-            ?assertEqual({error, {rw_val_violation, <<"abc">>}}, Result)
-    after
-        5000 ->
-            ?assert(false)
-    end.
+% invalid_rw_delete() ->
+%     RW = <<"abc">>,
+%     %% Start the gen_fsm process
+%     RequestId = erlang:phash2(erlang:now()),
+%     Bucket = <<"testbucket">>,
+%     Key = <<"testkey">>,
+%     Timeout = 60000,
+%     riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{rw,RW}], Timeout, self()]),
+%     %% Wait for error response
+%     receive
+%         {_RequestId, Result} ->
+%             ?assertEqual({error, {rw_val_violation, <<"abc">>}}, Result)
+%     after
+%         5000 ->
+%             ?assert(false)
+%     end.
 
-invalid_r_delete() ->
-    R = <<"abc">>,
-    %% Start the gen_fsm process
-    RequestId = erlang:phash2(erlang:now()),
-    Bucket = <<"testbucket">>,
-    Key = <<"testkey">>,
-    Timeout = 60000,
-    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{r,R}], Timeout, self()]),
-    %% Wait for error response
-    receive
-        {_RequestId, Result} ->
-            ?assertEqual({error, {r_val_violation, <<"abc">>}}, Result)
-    after
-        5000 ->
-            ?assert(false)
-    end.
+% invalid_r_delete() ->
+%     R = <<"abc">>,
+%     %% Start the gen_fsm process
+%     RequestId = erlang:phash2(erlang:now()),
+%     Bucket = <<"testbucket">>,
+%     Key = <<"testkey">>,
+%     Timeout = 60000,
+%     riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{r,R}], Timeout, self()]),
+%     %% Wait for error response
+%     receive
+%         {_RequestId, Result} ->
+%             ?assertEqual({error, {r_val_violation, <<"abc">>}}, Result)
+%     after
+%         5000 ->
+%             ?assert(false)
+%     end.
 
-invalid_w_delete() ->
-    W = <<"abc">>,
-    %% Start the gen_fsm process
-    RequestId = erlang:phash2(erlang:now()),
-    Bucket = <<"testbucket">>,
-    Key = <<"testkey">>,
-    Timeout = 60000,
-    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{w,W}],
-            Timeout, self(), undefined, vclock:fresh()]),
-    %% Wait for error response
-    receive
-        {_RequestId, Result} ->
-            ?assertEqual({error, {w_val_violation, <<"abc">>}}, Result)
-    after
-        5000 ->
-            ?assert(false)
-    end.
+% invalid_w_delete() ->
+%     W = <<"abc">>,
+%     %% Start the gen_fsm process
+%     RequestId = erlang:phash2(erlang:now()),
+%     Bucket = <<"testbucket">>,
+%     Key = <<"testkey">>,
+%     Timeout = 60000,
+%     riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{w,W}],
+%             Timeout, self(), undefined, vclock:fresh()]),
+%     %% Wait for error response
+%     receive
+%         {_RequestId, Result} ->
+%             ?assertEqual({error, {w_val_violation, <<"abc">>}}, Result)
+%     after
+%         5000 ->
+%             ?assert(false)
+%     end.
 
-invalid_pr_delete() ->
-    PR = <<"abc">>,
-    %% Start the gen_fsm process
-    RequestId = erlang:phash2(erlang:now()),
-    Bucket = <<"testbucket">>,
-    Key = <<"testkey">>,
-    Timeout = 60000,
-    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{pr,PR}], Timeout, self()]),
-    %% Wait for error response
-    receive
-        {_RequestId, Result} ->
-            ?assertEqual({error, {pr_val_violation, <<"abc">>}}, Result)
-    after
-        5000 ->
-            ?assert(false)
-    end.
+% invalid_pr_delete() ->
+%     PR = <<"abc">>,
+%     %% Start the gen_fsm process
+%     RequestId = erlang:phash2(erlang:now()),
+%     Bucket = <<"testbucket">>,
+%     Key = <<"testkey">>,
+%     Timeout = 60000,
+%     riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key, [{pr,PR}], Timeout, self()]),
+%     %% Wait for error response
+%     receive
+%         {_RequestId, Result} ->
+%             ?assertEqual({error, {pr_val_violation, <<"abc">>}}, Result)
+%     after
+%         5000 ->
+%             ?assert(false)
+%     end.
 
-invalid_pw_delete() ->
-    PW = <<"abc">>,
-    %% Start the gen_fsm process
-    RequestId = erlang:phash2(erlang:now()),
-    Bucket = <<"testbucket">>,
-    Key = <<"testkey">>,
-    Timeout = 60000,
-    riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key,
-            [{pw,PW}], Timeout, self(), undefined, vclock:fresh()]),
-    %% Wait for error response
-    receive
-        {_RequestId, Result} ->
-            ?assertEqual({error, {pw_val_violation, <<"abc">>}}, Result)
-    after
-        5000 ->
-            ?assert(false)
-    end.
+% invalid_pw_delete() ->
+%     PW = <<"abc">>,
+%     %% Start the gen_fsm process
+%     RequestId = erlang:phash2(erlang:now()),
+%     Bucket = <<"testbucket">>,
+%     Key = <<"testkey">>,
+%     Timeout = 60000,
+%     riak_kv_delete_sup:start_delete(node(), [RequestId, Bucket, Key,
+%             [{pw,PW}], Timeout, self(), undefined, vclock:fresh()]),
+%     %% Wait for error response
+%     receive
+%         {_RequestId, Result} ->
+%             ?assertEqual({error, {pw_val_violation, <<"abc">>}}, Result)
+%     after
+%         5000 ->
+%             ?assert(false)
+%     end.
 
-configure(load) ->
-    application:set_env(riak_core, default_bucket_props,
-                        [{r, quorum}, {w, quorum}, {pr, 0}, {pw, 0},
-                         {rw, quorum}, {n_val, 3}]),
-    application:set_env(riak_kv, storage_backend, riak_kv_memory_backend);
-configure(_) -> ok.
+% configure(load) ->
+%     application:set_env(riak_core, default_bucket_props,
+%                         [{r, quorum}, {w, quorum}, {pr, 0}, {pw, 0},
+%                          {rw, quorum}, {n_val, 3}]),
+%     application:set_env(riak_kv, storage_backend, riak_kv_memory_backend);
+% configure(_) -> ok.
 
-setup() ->
-    riak_kv_test_util:common_setup(?MODULE, fun configure/1).
+% setup() ->
+%     riak_kv_test_util:common_setup(?MODULE, fun configure/1).
 
-cleanup() ->
-    riak_kv_test_util:common_cleanup(?MODULE, fun configure/1).
+% cleanup() ->
+%     riak_kv_test_util:common_cleanup(?MODULE, fun configure/1).
 
 
 -endif.

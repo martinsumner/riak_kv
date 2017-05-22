@@ -28,16 +28,20 @@
          start_vnodes/1,
          get/3,
          get/4,
+         head/3,
+         head/4,
          del/3,
          put/6,
          local_get/2,
          local_put/2,
          local_put/3,
+         local_reap/3,
          coord_put/6,
          readrepair/6,
          list_keys/4,
          fold/3,
          fold/4,
+         sweep/3,
          get_vclocks/2,
          vnode_status/1,
          ack_keys/1,
@@ -183,7 +187,7 @@
 %% If it takes more than 20 seconds to fsync the vnode counter to disk,
 %% die
 -define(DEFAULT_CNTR_LEASE_TO, 20000). % 20 seconds!
-
+%%
 
 %% Erlang's if Bool -> thing; true -> thang end. syntax hurts my
 %% brain. It scans as if true -> thing; true -> thang end. So, here is
@@ -202,7 +206,8 @@
                   prunetime :: undefined| non_neg_integer(),
                   readrepair=false :: boolean(),
                   is_index=false :: boolean(), %% set if the b/end supports indexes
-                  crdt_op = undefined :: undefined | term() %% if set this is a crdt operation
+                  crdt_op = undefined :: undefined | term(), %% if set this is a crdt operation
+                  hash_ops = no_hash_ops
                  }).
 
 -spec maybe_create_hashtrees(state()) -> state().
@@ -268,9 +273,27 @@ get(Preflist, BKey, ReqId, Sender) ->
                                    Sender,
                                    riak_kv_vnode_master).
 
+head(Preflist, BKey, ReqId) ->
+    %% Assuming this function is called from a FSM process
+    %% so self() == FSM pid
+    head(Preflist, BKey, ReqId, {fsm, undefined, self()}).
+
+head(Preflist, BKey, ReqId, Sender) ->
+    Req = riak_kv_requests:new_head_request(sanitize_bkey(BKey), ReqId),
+    riak_core_vnode_master:command(Preflist,
+                                   Req,
+                                   Sender,
+                                   riak_kv_vnode_master).
+
 del(Preflist, BKey, ReqId) ->
     Req = riak_kv_requests:new_delete_request(sanitize_bkey(BKey), ReqId),
     riak_core_vnode_master:command(Preflist, Req, riak_kv_vnode_master).
+
+reap(Preflist, BKey, RObj, Sender) ->
+    riak_core_vnode_master:command(Preflist,
+                                   {reap, sanitize_bkey(BKey), RObj},
+                                   Sender,
+                                   riak_kv_vnode_master).
 
 %% Issue a put for the object to the preflist, expecting a reply
 %% to an FSM.
@@ -291,11 +314,14 @@ local_put(Index, Obj) ->
 
 local_put(Index, Obj, Options) ->
     BKey = {riak_object:bucket(Obj), riak_object:key(Obj)},
-    Ref = make_ref(),
     ReqId = erlang:phash2(erlang:now()),
     StartTime = riak_core_util:moment(),
+    put({Index, node()}, BKey, Obj, ReqId, StartTime, Options, ignore).
+
+local_reap(Index, BKey, RObj) ->
+    Ref = make_ref(),
     Sender = {raw, Ref, self()},
-    put({Index, node()}, BKey, Obj, ReqId, StartTime, Options, Sender),
+    reap({Index, node()}, BKey, RObj, Sender),
     receive
         {Ref, Reply} ->
             Reply
@@ -351,6 +377,11 @@ fold(Preflist, Fun, Acc0, Options) ->
     Req = riak_core_util:make_fold_req(Fun, Acc0, false, Options),
     riak_core_vnode_master:sync_spawn_command(Preflist,
                                               Req,
+                                              riak_kv_vnode_master).
+
+sweep(Preflist, Participants, EstimatedKeys) ->
+    riak_core_vnode_master:sync_spawn_command(Preflist,
+                                              {sweep, Participants, EstimatedKeys},
                                               riak_kv_vnode_master).
 
 get_vclocks(Preflist, BKeyList) ->
@@ -530,6 +561,9 @@ handle_overload_request(kv_put_request, _Req, Sender, Idx) ->
 handle_overload_request(kv_get_request, Req, Sender, Idx) ->
     ReqId = riak_kv_requests:get_request_id(Req),
     riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqId});
+handle_overload_request(kv_head_request, Req, Sender, Idx) ->
+    ReqId = riak_kv_requests:get_request_id(Req),
+    riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqId});
 handle_overload_request(kv_w1c_put_request, Req, Sender, _Idx) ->
     Type = riak_kv_requests:get_replica_type(Req),
     riak_core_vnode:reply(Sender, ?KV_W1C_PUT_REPLY{reply={error, overload}, type=Type});
@@ -601,6 +635,7 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
         _ ->
             {noreply, State}
     end;
+
 handle_command(#riak_core_fold_req_v1{} = ReqV1,
                Sender, State) ->
     %% Use make_fold_req() to upgrade to the most recent ?FOLD_REQ
@@ -609,15 +644,14 @@ handle_command(?FOLD_REQ{foldfun=FoldFun, acc0=Acc0,
                          forwardable=_Forwardable, opts=Opts}, Sender, State) ->
     %% The riak_core layer takes care of forwarding/not forwarding, so
     %% we ignore forwardable here.
-    %%
-    %% The function in riak_core used for object folding expects the
-    %% bucket and key pair to be passed as the first parameter, but in
-    %% riak_kv the bucket and key have been separated. This function
-    %% wrapper is to address this mismatch.
-    FoldWrapper = fun(Bucket, Key, Value, Acc) ->
-                          FoldFun({Bucket, Key}, Value, Acc)
-                  end,
-    do_fold(FoldWrapper, Acc0, Sender, Opts, State);
+    do_fold(FoldFun, Acc0, Sender, Opts, State);
+
+handle_command({sweep, Participants, EstimatedKeys}, Sender, State) ->
+    do_sweep(Participants, EstimatedKeys, Sender, State);
+
+handle_command({reap, BKey, RObj}, _Sender, State) ->
+     State1 = do_backend_delete(BKey, RObj, tombstone, State),
+     {reply, ok, State1};
 
 %% entropy exchange commands
 handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
@@ -846,6 +880,19 @@ handle_request(kv_get_request, Req, Sender, State) ->
     BKey = riak_kv_requests:get_bucket_key(Req),
     ReqId = riak_kv_requests:get_request_id(Req),
     do_get(Sender, BKey, ReqId, State);
+handle_request(kv_head_request, Req, Sender, State) ->
+    BKey = riak_kv_requests:get_bucket_key(Req),
+    ReqId = riak_kv_requests:get_request_id(Req),
+    Mod = State#state.mod,
+    ModState = State#state.modstate,
+    {ok, Capabilities} = Mod:capabilities(ModState),
+    case maybe_support_head_requests(Capabilities) of
+        true ->
+            do_head(Sender, BKey, ReqId, State);
+        _ ->
+            do_get(Sender, BKey, ReqId, State)
+    end;
+    
 %% NB. The following two function clauses discriminate on the async_put State field
 handle_request(kv_w1c_put_request, Req, Sender, State=#state{async_put=true}) ->
     {Bucket, Key} = riak_kv_requests:get_bucket_key(Req),
@@ -1236,7 +1283,7 @@ handle_info({ensemble_put, Key, Obj, From}, State=#state{handoff_target=HOTarget
                                                          forward=Fwd}) ->
     case Fwd of
         undefined ->
-            {Result, State2} = actual_put_tracked(Key, Obj, [], false, undefined, State),
+            {Result, State2} = actual_put_tracked(Key, Obj, [], false, undefined, update, State),
             Reply = case Result of
                         {dw, _Idx, _Obj, _ReqID} ->
                             Obj;
@@ -1254,7 +1301,7 @@ handle_info({ensemble_put, Key, Obj, From}, State=#state{handoff_target=HOTarget
     end;
 
 handle_info({raw_forward_put, Key, Obj, From}, State) ->
-    {Result, State2} = actual_put_tracked(Key, Obj, [], false, undefined, State),
+    {Result, State2} = actual_put_tracked(Key, Obj, [], false, undefined, update, State),
     Reply = case Result of
                 {dw, _Idx, _Obj, _ReqID} ->
                     Obj;
@@ -1276,7 +1323,7 @@ handle_info({raw_forward_get, Key, From}, State) ->
     riak_kv_ensemble_backend:reply(From, Reply),
     {ok, State2};
 handle_info({raw_put, Key, Obj}, State) ->
-    {_, State2} = actual_put_tracked(Key, Obj, [], false, undefined, State),
+    {_, State2} = actual_put_tracked(Key, Obj, [], false, undefined, update, State),
     {ok, State2};
 
 handle_info(retry_create_hashtree, State=#state{hashtrees=undefined}) ->
@@ -1302,8 +1349,8 @@ handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=Mod
                    {{ok, RObj}, ModState1} ->
                        case delete_hash(RObj) of
                            RObjHash ->
-                               do_backend_delete(BKey, RObj, State#state{modstate=ModState1});
-                         _ ->
+                               do_backend_delete(BKey, RObj, delete, State#state{modstate=ModState1});
+                           _ ->
                                State#state{modstate=ModState1}
                        end;
                    {{error, _}, ModState1} ->
@@ -1400,6 +1447,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                 end,
     Coord = proplists:get_value(coord, Options, false),
     CRDTOp = proplists:get_value(counter_op, Options, proplists:get_value(crdt_op, Options, undefined)),
+    HashOps = proplists:get_value(hashtree_action, Options, update),
     PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false) orelse Coord,
                        coord=Coord,
                        lww=proplists:get_value(last_write_wins, BProps, false),
@@ -1410,7 +1458,8 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        starttime=StartTime,
                        readrepair = ReadRepair,
                        prunetime=PruneTime,
-                       crdt_op = CRDTOp},
+                       crdt_op = CRDTOp,
+                       hash_ops = HashOps},
     {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
     {Reply, UpdState} = perform_put(PrepPutRes, State2, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
@@ -1418,26 +1467,35 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     update_index_write_stats(UpdPutArgs#putargs.is_index, UpdPutArgs#putargs.index_specs),
     {Reply, UpdState}.
 
-do_backend_delete(BKey, RObj, State = #state{idx = Idx,
-                                             mod = Mod,
-                                             modstate = ModState}) ->
+do_backend_delete(BKey, RObj, HashtreeAction, State = #state{idx = Idx,
+                                                             mod = Mod,
+                                                             modstate = ModState}) ->
     %% object is a tombstone or all siblings are tombstones
     %% Calculate the index specs to remove...
     %% JDM: This should just be a tombstone by this point, but better
     %% safe than sorry.
     IndexSpecs = riak_object:diff_index_specs(undefined, RObj),
-
     %% Do the delete...
     {Bucket, Key} = BKey,
     case Mod:delete(Bucket, Key, IndexSpecs, ModState) of
         {ok, UpdModState} ->
             ?INDEX({RObj, no_old_object}, delete, Idx),
-            delete_from_hashtree(Bucket, Key, State),
+            hashtree_action(Bucket, Key, RObj, HashtreeAction, State),
             maybe_cache_evict(BKey, State),
             update_index_delete_stats(IndexSpecs),
             State#state{modstate = UpdModState};
         {error, _Reason, UpdModState} ->
             State#state{modstate = UpdModState}
+    end.
+
+hashtree_action(Bucket, Key, RObj, HashtreeAction, State) ->
+    case HashtreeAction of
+        delete ->
+            delete_from_hashtree(Bucket, Key, State);
+        tombstone ->
+            update_hashtree(Bucket, Key, tombstone, State);
+        update ->
+            update_hashtree(Bucket, Key, RObj, State)
     end.
 
 %% Compute a hash of the deleted object
@@ -1488,17 +1546,35 @@ prepare_read_before_write_put(#state{mod = Mod,
                                      modstate = ModState,
                                      md_cache = MDCache}=State,
                               #putargs{bkey={Bucket, Key}=BKey,
-                                       robj=RObj}=PutArgs,
+                                       robj=RObj,
+                                       coord=Coord}=PutArgs,
                               IndexBackend, IsSearchable) ->
-    {CacheClock, CacheData} = maybe_check_md_cache(MDCache, BKey),
-
-    RequiresGet = determine_requires_get(CacheClock, RObj, IsSearchable),
-    GetReply = get_old_object_or_fake(RequiresGet, Bucket, Key, Mod, ModState, CacheClock),
+    {CacheClock, CacheData} = maybefetch_clock_and_indexdata(MDCache,
+                                                                BKey,
+                                                                Mod,
+                                                                ModState,
+                                                                Coord,
+                                                                IsSearchable),
+    {GetReply, RequiresGet} =
+        case CacheClock of
+            not_found ->
+                {not_found, false};
+            _ ->
+                ReqGet = determine_requires_get(CacheClock,
+                                                    RObj,
+                                                    IsSearchable),
+                {get_old_object_or_fake(ReqGet,
+                                            Bucket, Key,
+                                            Mod, ModState,
+                                            CacheClock),
+                    ReqGet}
+        end,
     case GetReply of
         not_found ->
             prepare_put_new_object(State, PutArgs, IndexBackend);
         {ok, OldObj} ->
-            prepare_put_existing_object(State, PutArgs, OldObj, IndexBackend, CacheData, RequiresGet)
+            prepare_put_existing_object(State, PutArgs, OldObj,
+                                        IndexBackend, CacheData, RequiresGet)
     end.
 
 prepare_put_existing_object(#state{idx =Idx} = State,
@@ -1539,8 +1615,9 @@ get_index_specs(_IndexedBackend=true, CacheData, RequiresGet, NewObj, OldObj) ->
          RequiresGet == false of
         true ->
             NewData = riak_object:index_data(NewObj),
-            riak_object:diff_index_data(NewData,
-                                        CacheData);
+            % Note diff_index_data and diff_index_specs take inputs in reverse!
+            riak_object:diff_index_data(CacheData,
+                                        NewData);
         false ->
             riak_object:diff_index_specs(NewObj,
                                          OldObj)
@@ -1586,10 +1663,11 @@ determine_requires_get(CacheClock, RObj, IsSearchable) ->
         Clock ->
             %% We need to perform a local get, to merge contents,
             %% if the local object has events unseen by the
-            %% incoming object. If the incoming object descends
+            %% incoming object. If the incoming object dominates
             %% the cache (i.e. has seen all its events) no need to
             %% do a local get and merge, just overwrite.
-            not riak_object:vclock_descends(RObj, Clock) orelse IsSearchable
+            not vclock:dominates(riak_object:vclock(RObj), Clock) 
+                orelse IsSearchable
     end,
     RequiresGet.
 
@@ -1636,27 +1714,27 @@ perform_put({true, {_Obj, _OldObj}=Objects},
                      bkey=BKey,
                      reqid=ReqID,
                      index_specs=IndexSpecs,
-                     readrepair=ReadRepair}) ->
+                     readrepair=ReadRepair,
+                     hash_ops=HashtreeAction}) ->
     case ReadRepair of
       true ->
         MaxCheckFlag = no_max_check;
       false ->
         MaxCheckFlag = do_max_check
     end,
-    {Reply, State2} = actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag, State),
-    {Reply, State2}.
+    actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag, HashtreeAction, State).
 
-actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, State) ->
-    actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, do_max_check, State).
+actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, HashtreeAction, State) ->
+    actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, do_max_check, HashtreeAction, State).
 
-actual_put(BKey={Bucket, Key}, {Obj, OldObj}, IndexSpecs, RB, ReqID, MaxCheckFlag,
+actual_put(BKey={Bucket, Key}, {Obj, OldObj}, IndexSpecs, RB, ReqID, MaxCheckFlag, HashtreeAction,
            State=#state{idx=Idx,
                         mod=Mod,
                         modstate=ModState}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                        MaxCheckFlag) of
         {{ok, UpdModState}, EncodedVal} ->
-            update_hashtree(Bucket, Key, EncodedVal, State),
+            hashtree_action(Bucket, Key, EncodedVal, HashtreeAction, State),
             maybe_cache_object(BKey, Obj, State),
             ?INDEX({Obj, OldObj}, put, Idx),
             Reply = case RB of
@@ -1670,13 +1748,13 @@ actual_put(BKey={Bucket, Key}, {Obj, OldObj}, IndexSpecs, RB, ReqID, MaxCheckFla
     end,
     {Reply, State#state{modstate=UpdModState}}.
 
-actual_put_tracked(BKey, {_NewObj, _OldObj} = Objs, IndexSpecs, RB, ReqId, State) ->
+actual_put_tracked(BKey, {_NewObj, _OldObj} = Objs, IndexSpecs, RB, ReqId, HashtreeAction, State) ->
     StartTS = os:timestamp(),
-    Result = actual_put(BKey, Objs, IndexSpecs, RB, ReqId, State),
+    Result = actual_put(BKey, Objs, IndexSpecs, RB, ReqId, HashtreeAction, State),
     update_vnode_stats(vnode_put, State#state.idx, StartTS),
     Result;
-actual_put_tracked(BKey, Obj, IndexSpecs, RB, ReqId, State) ->
-    actual_put_tracked(BKey, {Obj, no_old_object}, IndexSpecs, RB, ReqId, State).
+actual_put_tracked(BKey, Obj, IndexSpecs, RB, ReqId, HashtreeAction, State) ->
+    actual_put_tracked(BKey, {Obj, no_old_object}, IndexSpecs, RB, ReqId, HashtreeAction, State).
 
 do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
     case do_get_object(Bucket, Key, Mod, ModState) of
@@ -1687,7 +1765,8 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
             %% since it is assumed capabilities have been properly set
             %% to the desired version, to reformat, all we need to do
             %% is submit a new write
-            PutArgs = #putargs{returnbody=false,
+            PutArgs = #putargs{hash_ops = update,
+                               returnbody=false,
                                bkey=BKey,
                                reqid=undefined,
                                index_specs=[]},
@@ -1711,7 +1790,14 @@ enforce_allow_mult(Obj, BProps) ->
                 [_] -> Obj;
                 Mult ->
                     {MD, V} = select_newest_content(Mult),
-                    riak_object:set_contents(Obj, [{MD, V}])
+                    MergedObj = riak_object:set_contents(Obj, [{MD, V}]),
+                    case riak_object:is_head(MergedObj) of
+                        true ->
+                          lager:error("Merge resulted in head_only object"),
+                          MergedObj;
+                        false ->
+                          MergedObj
+                    end
             end
     end.
 
@@ -1721,8 +1807,8 @@ select_newest_content(Mult) ->
     hd(lists:sort(
          fun({MD0, _}, {MD1, _}) ->
                  riak_core_util:compare_dates(
-                   dict:fetch(<<"X-Riak-Last-Modified">>, MD0),
-                   dict:fetch(<<"X-Riak-Last-Modified">>, MD1))
+                   riak_object:get_last_modified(MD0),
+                   riak_object:get_last_modified(MD1))
          end,
          Mult)).
 
@@ -1758,15 +1844,37 @@ do_get(_Sender, BKey, ReqID,
        State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
     StartTS = os:timestamp(),
     {Retval, ModState1} = do_get_term(BKey, Mod, ModState),
+    State1 = State#state{modstate=ModState1},
+    {Retval1, State3} = handle_returned_value(BKey, Retval, State1),
+    update_vnode_stats(vnode_get, Idx, StartTS),
+    {reply, {r, Retval1, Idx, ReqID}, State3}.
+
+%% @private
+do_head(_Sender, BKey, ReqID,
+       State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
+    {Retval, ModState1} = do_head_term(BKey, Mod, ModState),
+    State1 = State#state{modstate=ModState1},
+    {Retval1, State3} = handle_returned_value(BKey, Retval, State1),
+    {reply, {r, Retval1, Idx, ReqID}, State3}.
+
+%% @private 
+%% Function shared between GET and HEAD requests, so should not assume 
+%% presence of content value
+handle_returned_value(BKey, Retval, State) ->
     case Retval of
         {ok, Obj} ->
-            maybe_cache_object(BKey, Obj, State);
+            case riak_kv_util:is_x_expired(Obj) of
+                true ->
+                    State2 = do_backend_delete(BKey, Obj, tombstone, State),
+                    {{error, notfound}, State2};
+                _ ->
+                    maybe_cache_object(BKey, Obj, State),
+                    {Retval, State}
+            end;
         _ ->
-            ok
-    end,
-    update_vnode_stats(vnode_get, Idx, StartTS),
-    {reply, {r, Retval, Idx, ReqID}, State#state{modstate=ModState1}}.
-
+            {Retval, State}
+    end.
+    
 %% @private
 -spec do_get_term({binary(), binary()}, atom(), tuple()) ->
                          {{ok, riak_object:riak_object()}, tuple()} |
@@ -1774,6 +1882,26 @@ do_get(_Sender, BKey, ReqID,
                          {{error, any()}, tuple()}.
 do_get_term({Bucket, Key}, Mod, ModState) ->
     case do_get_object(Bucket, Key, Mod, ModState) of
+        {ok, Obj, UpdModState} ->
+            {{ok, Obj}, UpdModState};
+        %% @TODO Eventually it would be good to
+        %% make the use of not_found or notfound
+        %% consistent throughout the code.
+        {error, not_found, UpdModState} ->
+            {{error, notfound}, UpdModState};
+        {error, Reason, UpdModState} ->
+            {{error, Reason}, UpdModState};
+        Err ->
+            Err
+    end.
+
+%% @private
+-spec do_head_term({binary(), binary()}, atom(), tuple()) ->
+                         {{ok, riak_object:riak_object()}, tuple()} |
+                         {{error, notfound}, tuple()} |
+                         {{error, any()}, tuple()}.
+do_head_term({Bucket, Key}, Mod, ModState) ->
+    case do_get_object(Bucket, Key, Mod, ModState, fun do_head_binary/4) of
         {ok, Obj, UpdModState} ->
             {{ok, Obj}, UpdModState};
         %% @TODO Eventually it would be good to
@@ -1795,13 +1923,19 @@ do_get_binary(Bucket, Key, Mod, ModState) ->
             Mod:get(Bucket, Key, ModState)
     end.
 
+do_head_binary(Bucket, Key, Mod, ModState) ->
+    Mod:head(Bucket, Key, ModState).
+
 do_get_object(Bucket, Key, Mod, ModState) ->
+    do_get_object(Bucket, Key, Mod, ModState, fun do_get_binary/4).
+
+do_get_object(Bucket, Key, Mod, ModState, BinFetchFun) ->
     case uses_r_object(Mod, ModState, Bucket) of
         true ->
             %% Non binary returns do not trigger size warnings
             Mod:get_object(Bucket, Key, false, ModState);
         false ->
-            case do_get_binary(Bucket, Key, Mod, ModState) of
+            case BinFetchFun(Bucket, Key, Mod, ModState) of
                 {ok, ObjBin, _UpdModState} ->
                     BinSize = size(ObjBin),
                     WarnSize = app_helper:get_env(riak_kv, warn_object_size),
@@ -1976,11 +2110,12 @@ do_delete(BKey, State) ->
                 undefined ->
                     case DeleteMode of
                         keep ->
-                            %% keep tombstones indefinitely
+                            %% keep tombstones indefinitely or
+                            %% until the reaper sweep remove it
                             {reply, {fail, Idx, del_mode_keep},
                              State#state{modstate=UpdModState}};
                         immediate ->
-                            UpdState = do_backend_delete(BKey, RObj,
+                            UpdState = do_backend_delete(BKey, RObj, delete,
                                                          State#state{modstate=UpdModState}),
                             {reply, {del, Idx, del_mode_immediate}, UpdState};
                         Delay when is_integer(Delay) ->
@@ -2002,12 +2137,9 @@ do_delete(BKey, State) ->
     end.
 
 %% @private
-do_fold(Fun, Acc0, Sender, ReqOpts, State=#state{async_folding=AsyncFolding,
-                                                 mod=Mod,
-                                                 modstate=ModState}) ->
-    {ok, Capabilities} = Mod:capabilities(ModState),
-    Opts0 = maybe_enable_async_fold(AsyncFolding, Capabilities, ReqOpts),
-    Opts = maybe_enable_iterator_refresh(Capabilities, Opts0),
+do_fold(FoldFun, Acc0, Sender, ReqOpts, State=#state{mod=Mod, modstate=ModState}) ->
+    Fun = convert_fun(FoldFun),
+    Opts = get_fold_opts(ReqOpts, State),
     case Mod:fold_objects(Fun, Acc0, Opts, ModState) of
         {ok, Acc} ->
             {reply, Acc, State};
@@ -2022,6 +2154,34 @@ do_fold(Fun, Acc0, Sender, ReqOpts, State=#state{async_folding=AsyncFolding,
     end.
 
 %% @private
+get_fold_opts(ReqOpts, #state{async_folding=AsyncFolding,
+                           mod=Mod,
+                           modstate=ModState}) ->
+    {ok, Capabilities} = Mod:capabilities(ModState),
+    Opts0 = maybe_enable_async_fold(AsyncFolding, Capabilities, ReqOpts),
+    maybe_enable_iterator_refresh(Capabilities, Opts0).
+
+%% The function in riak_core used for object folding expects the
+%% bucket and key pair to be passed as the first parameter, but in
+%% riak_kv the bucket and key have been separated. This function
+%% wrapper is to address this mismatch.
+convert_fun(FoldFun) ->
+    fun(Bucket, Key, Value, Acc) ->
+            FoldFun({Bucket, Key}, Value, Acc)
+    end.
+
+
+do_sweep([], _EstimatedKeys, _Sender, State=#state{idx=Index}) ->
+    lager:info("No participants in sweep ~p", [Index]),
+    {reply, no_participant, State};
+
+do_sweep(ActiveParticipants, EstimatedKeys, Sender, State) ->
+    Opts = get_fold_opts([sweep_fold, {iterator_refresh, true}], State),
+    do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, State).
+
+do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, State=#state{idx=Index, mod=Mod, modstate=ModState}) ->
+    riak_kv_sweeper_fold:do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index, Mod, ModState, State).
+
 -spec maybe_enable_async_fold(boolean(), list(), list()) -> list().
 maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->
     AsyncBackend = lists:member(async_fold, Capabilities),
@@ -2051,6 +2211,10 @@ maybe_enable_iterator_refresh(Capabilities, Opts) ->
         false ->
             lists:keydelete(iterator_refresh, 1, Opts)
     end.
+
+%% @private
+maybe_support_head_requests(Capabilities) ->
+    lists:member(head, Capabilities).
 
 %% @private
 do_get_vclocks(KeyList,_State=#state{mod=Mod,modstate=ModState}) ->
@@ -2121,7 +2285,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
     end.
 
 -spec update_hashtree(binary(), binary(),
-                      riak_object:riak_object() | binary(),
+                      riak_object:riak_object() | binary() | tombstone,
                       state()) -> ok.
 update_hashtree(_Bucket, _Key, _RObj, #state{hashtrees=undefined}) ->
     ok;
@@ -2430,6 +2594,48 @@ maybe_check_md_cache(Table, BKey) ->
                     {undefined, undefined}
             end
     end.
+
+%% Function to return the clock of the object to be updated as well as the
+%% index data.  If the clock is dominated by that of the new object then a
+%% backend GET can be avoided.
+%%
+%% The clock can either come from the cache (which it won't do as this is by
+%% default disabled), or from a head request if the Module has the head
+%% capability.
+%%
+%% Should return {undefined, undefined} if there is no cache to be used or
+%% {not_found, undefined} if the lack of object has been confirmed, or
+%% {VClock, IndexData} if the result is found
+maybefetch_clock_and_indexdata(Table, BKey, Mod, ModState, Coord, IsSearchable) ->
+    CacheResult = maybe_check_md_cache(Table, BKey),
+    case CacheResult of
+        {undefined, undefined} ->
+            {ok, Capabilities} = Mod:capabilities(ModState),
+            CanGetHead = maybe_support_head_requests(Capabilities)
+                            andalso (not IsSearchable)
+                            andalso (not Coord),
+                % If the bucket is searchable won't use the cache bits anyway
+            case CanGetHead of
+                true ->
+                    {Bucket, Key} = sanitize_bkey(BKey),
+                    case do_head_binary(Bucket, Key, Mod, ModState) of
+                        {error, not_found, _UpdModState} ->
+                            {not_found, undefined};
+                        {ok, OldObjBin, _UpdModState} ->
+                            TheOldObj = riak_object:from_binary(Bucket,
+                                                                Key,
+                                                                OldObjBin),
+                            VClock = riak_object:vclock(TheOldObj),
+                            IndexData = riak_object:index_data(TheOldObj),
+                            {VClock, IndexData}
+                    end;
+                _ ->
+                    CacheResult
+            end;
+        _ ->
+            CacheResult
+    end.
+    
 
 maybe_cache_object(BKey, Obj, #state{md_cache = MDCache,
                                      md_cache_size = MDCacheSize}) ->
@@ -2789,6 +2995,7 @@ rollover_test_() ->
                end}
              ]}
     }.
+
 
 
 -endif.

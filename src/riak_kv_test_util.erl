@@ -331,6 +331,8 @@ start_app_and_deps(Application, Started) ->
                     {ok, [Application|Started]};
                 {error, {already_started, Application}} ->
                     {ok, Started};
+                {error, {{already_started, _Pid}, _}} ->
+                    {ok, Started};
                 {error, {not_started, Dep}} ->
                     case start_app_and_deps(Dep, Started) of
                         {ok, NStarted} ->
