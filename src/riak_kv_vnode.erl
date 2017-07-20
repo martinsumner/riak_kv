@@ -601,10 +601,11 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
             Filter = none
     end,
     BufferMod = riak_kv_fold_buffer,
-    case Bucket of
+	{ok, Capabilities} = Mod:capabilities(ModState),
+    OptsAF = maybe_enable_async_fold(AsyncFolding, Capabilities, []),
+    Opts = maybe_enable_snap_fold(AsyncFolding, Capabilities, OptsAF),
+	case Bucket of
         '_' ->
-            {ok, Capabilities} = Mod:capabilities(ModState),
-            Opts = maybe_enable_async_fold(AsyncFolding, Capabilities, []),
             BufferFun =
                 fun(Results) ->
                         UniqueResults = lists:usort(Results),
@@ -613,8 +614,6 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
             FoldFun = fold_fun(buckets, BufferMod, Filter, undefined),
             ModFun = fold_buckets;
         _ ->
-            {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
-            Opts = maybe_enable_async_fold(AsyncFolding, Capabilities, [{bucket, Bucket}]),
             BufferFun =
                 fun(Results) ->
                         Caller ! {ReqId, {kl, Idx, Results}}
@@ -632,6 +631,8 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
     case list(FoldFun, FinishFun, Mod, ModFun, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
             {async, {fold, AsyncWork, FinishFun}, Caller, State};
+		{snap, AsyncWork} ->
+			{snap, {fold, AsyncWork, FinishFun}, Caller, State};
         _ ->
             {noreply, State}
     end;
@@ -2185,12 +2186,25 @@ do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, State=#state{idx=Index
 -spec maybe_enable_async_fold(boolean(), list(), list()) -> list().
 maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->
     AsyncBackend = lists:member(async_fold, Capabilities),
-    options_for_folding_and_backend(Opts, AsyncFolding andalso AsyncBackend).
+    options_for_folding_and_backend(Opts,
+									AsyncFolding andalso AsyncBackend,
+									async_fold).
 
--spec options_for_folding_and_backend(list(), UseAsyncFolding :: boolean()) -> list().
-options_for_folding_and_backend(Opts, true) ->
+-spec maybe_enable_snap_fold(boolean(), list(), list()) -> list().
+maybe_enable_snap_fold(AsyncFolding, Capabilities, Opts) ->
+	SnapBackend = lists:member(snap_fold, Capabilities),
+    options_for_folding_and_backend(Opts,
+									AsyncFolding andalso SnapBackend,
+									snap_fold).
+
+-spec options_for_folding_and_backend(list(),
+										UseAsyncFolding :: boolean(),
+										atom()) -> list().
+options_for_folding_and_backend(Opts, true, async_fold) ->
     [async_fold | Opts];
-options_for_folding_and_backend(Opts, false) ->
+options_for_folding_and_backend(Opts, true, snap_fold) ->
+    [snap_fold | Opts];
+options_for_folding_and_backend(Opts, false, _) ->
     Opts.
 
 fold_type_for_query(Query) ->
