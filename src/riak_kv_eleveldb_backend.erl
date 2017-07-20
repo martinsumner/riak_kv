@@ -61,7 +61,7 @@
 
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold, indexes, index_reformat, size,
-        iterator_refresh]).
+        iterator_refresh, snap_fold]).
 -define(FIXED_INDEXES_KEY, fixed_indexes).
 
 -record(state, {ref :: eleveldb:db_ref(),
@@ -385,16 +385,31 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
     FoldFun = fold_keys_fun(FoldKeysFun, Limiter),
     FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
     ExtraFold = not FixedIdx orelse WriteLegacyIdx,
-    KeyFolder =
+    
+	Itr =
+		case lists:member(snap_fold, Opts) of
+			true ->
+				{ok, Itr0} = eleveldb:iterator(Ref, FoldOpts1, keys_only),
+				Itr0;
+			false ->
+				deferred
+		end,
+	
+	KeyFolder =
         fun() ->
             %% Do the fold. ELevelDB uses throw/1 to break out of a fold...
             AccFinal =
-                       try
-                           eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
-                       catch
-                           {break, BrkResult} ->
-                               BrkResult
-                       end,
+				try
+					case Itr of
+						deferred ->
+							eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1);
+						_ ->
+							eleveldb:do_fold(Itr, FoldFun, Acc, FoldOpts1)
+					end
+				catch
+					{break, BrkResult} ->
+						BrkResult
+				end,
             case ExtraFold of
                 true ->
                     legacy_key_fold(Ref, FoldFun, AccFinal, FoldOpts1, Limiter);
@@ -404,7 +419,12 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
         end,
     case lists:member(async_fold, Opts) of
         true ->
-            {async, KeyFolder};
+            case Itr of
+				deferred ->
+					{async, KeyFolder};
+				_ ->
+					{snap, KeyFolder}
+			end;
         false ->
             {ok, KeyFolder()}
     end.
