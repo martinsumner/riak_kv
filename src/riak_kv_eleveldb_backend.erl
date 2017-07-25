@@ -390,6 +390,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
 		case lists:member(snap_fold, Opts) of
 			true ->
 				{ok, Itr0} = eleveldb:iterator(Ref, FoldOpts1, keys_only),
+				lager:info("Snapped database for deferred query"),
 				Itr0;
 			false ->
 				deferred
