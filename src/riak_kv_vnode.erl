@@ -1061,6 +1061,8 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
     case list(FoldFun, FinishFun, Mod, FoldType, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
             {async, {fold, AsyncWork, FinishFun}, Sender, State};
+        {snap, DeferrableWork} ->
+            {snap, {fold, DeferrableWork, FinishFun}, Sender, State};
         _ ->
             {noreply, State}
     end.
@@ -1973,7 +1975,9 @@ list(FoldFun, FinishFun, Mod, ModFun, ModState, Opts, Buffer) ->
         {ok, Acc} ->
             FinishFun(Acc);
         {async, AsyncWork} ->
-            {async, AsyncWork}
+            {async, AsyncWork};
+        {snap, DeferrableWork} ->
+            {snap, DeferrableWork}
     end.
 
 %% @private
