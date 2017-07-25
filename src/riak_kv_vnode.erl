@@ -601,10 +601,9 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
             Filter = none
     end,
     BufferMod = riak_kv_fold_buffer,
-	{ok, Capabilities} = Mod:capabilities(ModState),
-    OptsAF = maybe_enable_async_fold(AsyncFolding, Capabilities, []),
-    Opts = maybe_enable_snap_fold(AsyncFolding, Capabilities, OptsAF),
-	case Bucket of
+  	{ok, Capabilities} = Mod:capabilities(ModState),
+    Opts = maybe_enable_async_fold(AsyncFolding, Capabilities, []),
+    case Bucket of
         '_' ->
             BufferFun =
                 fun(Results) ->
@@ -893,7 +892,7 @@ handle_request(kv_head_request, Req, Sender, State) ->
         _ ->
             do_get(Sender, BKey, ReqId, State)
     end;
-    
+
 %% NB. The following two function clauses discriminate on the async_put State field
 handle_request(kv_w1c_put_request, Req, Sender, State=#state{async_put=true}) ->
     {Bucket, Key} = riak_kv_requests:get_bucket_key(Req),
@@ -1057,7 +1056,8 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
     FoldFun = fold_fun(keys, BufferMod, Filter, Extras),
     FinishFun = finish_fun(BufferMod, Sender),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
-    Opts = maybe_enable_async_fold(AsyncFolding, Capabilities, Opts0),
+    OptsAF = maybe_enable_async_fold(AsyncFolding, Capabilities, Opts0),
+    Opts = maybe_enable_snap_fold(AsyncFolding, Capabilities, OptsAF),
     case list(FoldFun, FinishFun, Mod, FoldType, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
             {async, {fold, AsyncWork, FinishFun}, Sender, State};
@@ -1667,7 +1667,7 @@ determine_requires_get(CacheClock, RObj, IsSearchable) ->
             %% incoming object. If the incoming object dominates
             %% the cache (i.e. has seen all its events) no need to
             %% do a local get and merge, just overwrite.
-            not vclock:dominates(riak_object:vclock(RObj), Clock) 
+            not vclock:dominates(riak_object:vclock(RObj), Clock)
                 orelse IsSearchable
     end,
     RequiresGet.
@@ -1858,8 +1858,8 @@ do_head(_Sender, BKey, ReqID,
     {Retval1, State3} = handle_returned_value(BKey, Retval, State1),
     {reply, {r, Retval1, Idx, ReqID}, State3}.
 
-%% @private 
-%% Function shared between GET and HEAD requests, so should not assume 
+%% @private
+%% Function shared between GET and HEAD requests, so should not assume
 %% presence of content value
 handle_returned_value(BKey, Retval, State) ->
     case Retval of
@@ -1875,7 +1875,7 @@ handle_returned_value(BKey, Retval, State) ->
         _ ->
             {Retval, State}
     end.
-    
+
 %% @private
 -spec do_get_term({binary(), binary()}, atom(), tuple()) ->
                          {{ok, riak_object:riak_object()}, tuple()} |
@@ -2192,7 +2192,7 @@ maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->
 
 -spec maybe_enable_snap_fold(boolean(), list(), list()) -> list().
 maybe_enable_snap_fold(AsyncFolding, Capabilities, Opts) ->
-	SnapBackend = lists:member(snap_fold, Capabilities),
+	  SnapBackend = lists:member(snap_fold, Capabilities),
     options_for_folding_and_backend(Opts,
 									AsyncFolding andalso SnapBackend,
 									snap_fold).
@@ -2649,7 +2649,7 @@ maybefetch_clock_and_indexdata(Table, BKey, Mod, ModState, Coord, IsSearchable) 
         _ ->
             CacheResult
     end.
-    
+
 
 maybe_cache_object(BKey, Obj, #state{md_cache = MDCache,
                                      md_cache_size = MDCacheSize}) ->
