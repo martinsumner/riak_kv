@@ -385,7 +385,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
     FoldFun = fold_keys_fun(FoldKeysFun, Limiter),
     FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
     ExtraFold = not FixedIdx orelse WriteLegacyIdx,
-    
+
 	Itr =
 		case lists:member(snap_fold, Opts) of
 			true ->
@@ -395,7 +395,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
 			false ->
 				deferred
 		end,
-	
+
 	KeyFolder =
         fun() ->
             %% Do the fold. ELevelDB uses throw/1 to break out of a fold...
@@ -403,7 +403,9 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
 				try
 					case Itr of
 						deferred ->
-							eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1);
+              lager:info("Deferred fold initiated"),
+							eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1),
+              lager:info("Deferred fold completed");
 						_ ->
 							eleveldb:do_fold(Itr, FoldFun, Acc, FoldOpts1)
 					end
