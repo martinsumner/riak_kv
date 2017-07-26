@@ -407,7 +407,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
 						_ ->
               lager:info("Deferred fold initiated on previous snap"),
 							eleveldb:do_fold(Itr, FoldFun, Acc, FoldOpts1),
-              lager:info("Deferred fold completed on previous snap");
+              lager:info("Deferred fold completed on previous snap")
 					end
 				catch
 					{break, BrkResult} ->
