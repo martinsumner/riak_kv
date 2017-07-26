@@ -393,7 +393,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
 				lager:info("Snapped database for deferred query"),
 				Itr0;
 			false ->
-				deferred
+				to_snap
 		end,
 
 	KeyFolder =
@@ -402,12 +402,12 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
             AccFinal =
 				try
 					case Itr of
-						deferred ->
-              lager:info("Deferred fold initiated"),
-							eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1),
-              lager:info("Deferred fold completed");
+						to_snap ->
+							eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1);
 						_ ->
-							eleveldb:do_fold(Itr, FoldFun, Acc, FoldOpts1)
+              lager:info("Deferred fold initiated on previous snap"),
+							eleveldb:do_fold(Itr, FoldFun, Acc, FoldOpts1),
+              lager:info("Deferred fold completed on previous snap");
 					end
 				catch
 					{break, BrkResult} ->
@@ -423,7 +423,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
     case lists:member(async_fold, Opts) of
         true ->
             case Itr of
-				deferred ->
+				to_snap ->
 					{async, KeyFolder};
 				_ ->
 					{snap, KeyFolder}
