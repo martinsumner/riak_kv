@@ -47,12 +47,13 @@
 -endif.
 
 -define(RIAK_TAG, o_rkv).
--define(CAPABILITIES, [async_fold, 
+-define(CAPABILITIES, [async_fold,
                         indexes,
-                        head, 
+                        head,
                         fold_heads,
                         direct_fetch,
-                        putfsm_pause]).
+                        putfsm_pause,
+                        snap_prefold]).
 -define(API_VERSION, 1).
 
 -record(state, {bookie :: pid(),
@@ -89,9 +90,9 @@ start(Partition, Config) ->
     DataRoot = ?LEVELED_DATAROOT,
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
-            case leveled_bookie:book_start(DataDir, 
-                                            ?LEVELED_LEDGERCACHE, 
-                                            ?LEVELED_JOURNALSIZE, 
+            case leveled_bookie:book_start(DataDir,
+                                            ?LEVELED_LEDGERCACHE,
+                                            ?LEVELED_JOURNALSIZE,
                                             ?LEVELED_SYNCSTRATEGY) of
                 {ok, Bookie} ->
                     Ref = make_ref(),
@@ -211,6 +212,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
     %% secondary index, or neither (fold across everything.)
     Bucket = lists:keyfind(bucket, 1, Opts),
     Index = lists:keyfind(index, 1, Opts),
+    SnapPreFold = lists:member(snap_prefold, Opts),
 
     %% Multiple limiters may exist. Take the most specific limiter.
     {async, Folder} =
@@ -237,10 +239,12 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
                 leveled_bookie:book_returnfolder(Bookie, AllKeyQuery)
         end,
 
-    case proplists:get_bool(async_fold, Opts) of
-        true ->
+    case {proplists:get_bool(async_fold, Opts), SnapPreFold} of
+        {true, true} ->
+            {queue, Folder};
+        {true, false} ->
             {async, Folder};
-        false ->
+        _ ->
             {ok, Folder()}
     end.
 
@@ -337,13 +341,13 @@ data_size(_State) ->
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
 callback(Ref, compact_journal, State) ->
-    case is_reference(Ref) of 
+    case is_reference(Ref) of
         true ->
              prompt_journalcompaction(State#state.bookie,
                                         Ref,
                                         State#state.partition),
              {ok, State}
-    end. 
+    end.
 
 %% ===================================================================
 %% Internal functions
@@ -403,7 +407,7 @@ prompt_journalcompaction(Bookie, Ref, PartitionID) when is_reference(Ref) ->
     end,
     schedule_journalcompaction(Ref, PartitionID).
 
-    
+
 
 %% ===================================================================
 %% EUnit tests

@@ -61,7 +61,7 @@
 
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold, indexes, index_reformat, size,
-        iterator_refresh, snap_fold]).
+        iterator_refresh, snap_prefold]).
 -define(FIXED_INDEXES_KEY, fixed_indexes).
 
 -record(state, {ref :: eleveldb:db_ref(),
@@ -387,13 +387,13 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
     ExtraFold = not FixedIdx orelse WriteLegacyIdx,
 
 	Itr =
-		case lists:member(snap_fold, Opts) of
+		case lists:member(snap_prefold, Opts) of
 			true ->
-				{ok, Itr0} = eleveldb:iterator(Ref, FoldOpts1, keys_only),
-				lager:info("Snapped database for deferred query"),
+        lager:info("Snapping database for deferred query"),
+        {ok, Itr0} = eleveldb:iterator(Ref, FoldOpts1, keys_only),
 				Itr0;
 			false ->
-				to_snap
+				not_snapped
 		end,
 
 	KeyFolder =
@@ -402,7 +402,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
             AccFinal =
 				try
 					case Itr of
-						to_snap ->
+						not_snapped ->
 							eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1);
 						_ ->
               lager:info("Deferred fold initiated on previous snap"),
@@ -422,11 +422,11 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
     case lists:member(async_fold, Opts) of
         true ->
             case Itr of
-				to_snap ->
-					{async, KeyFolder};
-				_ ->
-					{snap, KeyFolder}
-			end;
+        				not_snapped ->
+        					{async, KeyFolder};
+        				_ ->
+        					{queue, KeyFolder}
+			      end;
         false ->
             {ok, KeyFolder()}
     end.

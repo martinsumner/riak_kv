@@ -630,9 +630,7 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
     case list(FoldFun, FinishFun, Mod, ModFun, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
             {async, {fold, AsyncWork, FinishFun}, Caller, State};
-		{snap, AsyncWork} ->
-			{snap, {fold, AsyncWork, FinishFun}, Caller, State};
-        _ ->
+		    _ ->
             {noreply, State}
     end;
 
@@ -1057,12 +1055,12 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
     FinishFun = finish_fun(BufferMod, Sender),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     OptsAF = maybe_enable_async_fold(AsyncFolding, Capabilities, Opts0),
-    Opts = maybe_enable_snap_fold(AsyncFolding, Capabilities, OptsAF),
+    Opts = maybe_enable_snap_prefold(AsyncFolding, Capabilities, OptsAF),
     case list(FoldFun, FinishFun, Mod, FoldType, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
             {async, {fold, AsyncWork, FinishFun}, Sender, State};
-        {snap, DeferrableWork} ->
-            {snap, {fold, DeferrableWork, FinishFun}, Sender, State};
+        {queue, DeferrableWork} ->
+            {queue, {fold, DeferrableWork, FinishFun}, Sender, State};
         _ ->
             {noreply, State}
     end.
@@ -1976,8 +1974,8 @@ list(FoldFun, FinishFun, Mod, ModFun, ModState, Opts, Buffer) ->
             FinishFun(Acc);
         {async, AsyncWork} ->
             {async, AsyncWork};
-        {snap, DeferrableWork} ->
-            {snap, DeferrableWork}
+        {queue, DeferrableWork} ->
+            {queue, DeferrableWork}
     end.
 
 %% @private
@@ -2194,20 +2192,20 @@ maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->
 									AsyncFolding andalso AsyncBackend,
 									async_fold).
 
--spec maybe_enable_snap_fold(boolean(), list(), list()) -> list().
-maybe_enable_snap_fold(AsyncFolding, Capabilities, Opts) ->
-	  SnapBackend = lists:member(snap_fold, Capabilities),
+-spec maybe_enable_snap_prefold(boolean(), list(), list()) -> list().
+maybe_enable_snap_prefold(AsyncFolding, Capabilities, Opts) ->
+	  SnapBackend = lists:member(snap_prefold, Capabilities),
     options_for_folding_and_backend(Opts,
 									AsyncFolding andalso SnapBackend,
-									snap_fold).
+									snap_prefold).
 
 -spec options_for_folding_and_backend(list(),
 										UseAsyncFolding :: boolean(),
 										atom()) -> list().
 options_for_folding_and_backend(Opts, true, async_fold) ->
     [async_fold | Opts];
-options_for_folding_and_backend(Opts, true, snap_fold) ->
-    [snap_fold | Opts];
+options_for_folding_and_backend(Opts, true, snap_prefold) ->
+    [snap_prefold | Opts];
 options_for_folding_and_backend(Opts, false, _) ->
     Opts.
 
