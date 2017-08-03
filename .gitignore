@@ -21,3 +21,4 @@ riak_kv.iml
 logs
 .ackrc
 *~
+.DS_Store
