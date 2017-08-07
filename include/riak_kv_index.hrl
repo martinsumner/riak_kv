@@ -38,6 +38,7 @@
           start_term :: integer() | binary() | undefined, %% Note, in a $key query, start_key==start_term
           end_term :: integer() | binary() | undefined, %% Note, in an eq query, start==end
           return_terms=true :: boolean(), %% Note, should be false for an equals query
+          return_tree=false :: boolean(), %% Used to return an AAE tree
           start_inclusive=true :: boolean(),
           end_inclusive=true :: boolean(),
           return_body=false ::boolean(), %% Note, only for riak cs bucket folds

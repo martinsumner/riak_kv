@@ -223,13 +223,23 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
                                                 start_term=StartTerm,
                                                 end_term=EndTerm,
                                                 return_terms=ReturnTerms,
+                                                return_tree=ReturnTree,
                                                 term_regex=TermRegex}} = Index,
-                IndexQuery = {index_query,
+                LevelEdQ =
+                    case ReturnTree of
+                        true ->
+                            {tictactree_idx,
+                                {QBucket, Field, StartTerm, EndTerm},
+                                small,
+                                FoldKeysFun};
+                        _ ->
+                            {index_query,
                                 {QBucket, StartKey},
                                 {FoldKeysFun, Acc},
                                 {Field, StartTerm, EndTerm},
-                                {ReturnTerms, TermRegex}},
-                leveled_bookie:book_returnfolder(Bookie, IndexQuery);
+                                {ReturnTerms, TermRegex}}
+                    end,
+                leveled_bookie:book_returnfolder(Bookie, LevelEdQ);
             Bucket /= false ->
                 {bucket, B} = Bucket,
                 BucketQuery = {keylist, ?RIAK_TAG, B, {FoldKeysFun, Acc}},
@@ -282,18 +292,38 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {async, fun()}.
 fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
+    CheckPresence =
+        case proplists:get_value(check_presence, Opts) of
+            undefined ->
+                true;
+            CP ->
+                CP
+        end,
+    SnapPreFold = lists:member(snap_prefold, Opts),
     Query =
         case proplists:get_value(bucket, Opts) of
             undefined ->
-                {foldheads_allkeys, ?RIAK_TAG, {FoldHeadsFun, Acc}};
+                {foldheads_allkeys,
+                  ?RIAK_TAG,
+                  {FoldHeadsFun, Acc},
+                  CheckPresence,
+                  SnapPreFold};
             B ->
-                {foldheads_bybucket, ?RIAK_TAG, B, {FoldHeadsFun, Acc}}
+                {foldheads_bybucket,
+                  ?RIAK_TAG,
+                  B,
+                  {FoldHeadsFun, Acc, CheckPresence},
+                  CheckPresence,
+                  SnapPreFold}
         end,
+
     {async, HeadFolder} = leveled_bookie:book_returnfolder(Bookie, Query),
-    case proplists:get_bool(async_fold, Opts) of
-        true ->
+    case {proplists:get_bool(async_fold, Opts), SnapPreFold} of
+        {true, true} ->
+            {queue, HeadFolder};
+        {true, false} ->
             {async, HeadFolder};
-        false ->
+        _ ->
             {ok, HeadFolder()}
     end.
 
