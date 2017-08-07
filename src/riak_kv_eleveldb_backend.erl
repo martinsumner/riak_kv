@@ -34,10 +34,6 @@
          async_put/5,
          delete/4,
          drop/1,
-         fix_index/3,
-         mark_indexes_fixed/2,
-         set_legacy_indexes/2,
-         fixed_index_status/1,
          fold_buckets/4,
          fold_keys/4,
          fold_objects/4,
@@ -47,6 +43,15 @@
          callback/3]).
 
 -export([data_size/1]).
+
+%% Needed for riak_kv_group_list
+-export([to_first_key/1,
+         from_object_key/1,
+         to_object_key/2,
+         grouped_fold/4,
+         iterator_open/2,
+         iterator_close/1,
+         iterator_move/2]).
 
 -compile({inline, [
                    to_object_key/2, from_object_key/1,
@@ -60,8 +65,7 @@
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, [async_fold, indexes, index_reformat, size,
-        iterator_refresh]).
+-define(CAPABILITIES, [async_fold, indexes, size, iterator_refresh]).
 -define(FIXED_INDEXES_KEY, fixed_indexes).
 
 -record(state, {ref :: eleveldb:db_ref(),
@@ -70,9 +74,7 @@
                 config :: config(),
                 read_opts = [],
                 write_opts = [],
-                fold_opts = [{fill_cache, false}],
-                fixed_indexes = false, %% true if legacy indexes have be rewritten
-                legacy_indexes = false %% true if new writes use legacy indexes (downgrade)
+                fold_opts = [{fill_cache, false}]
                }).
 
 
@@ -123,7 +125,7 @@ determine_fixed_index_status(State) ->
         {error, Reason} ->
             {error, Reason};
         true ->
-            {ok, State#state{fixed_indexes=true}};
+            {ok, State};
         false ->
             %% call eleveldb directly to circumvent extra check
             %% for fixed indexes entry. if entry is present we
@@ -131,15 +133,29 @@ determine_fixed_index_status(State) ->
             %% ignoring is not dangerous but reports confusing results
             %% (empty downgraded partitions still returning fixed = true)
             case eleveldb:is_empty(State#state.ref) of
-                true -> mark_indexes_fixed_on_start(State);
-                false -> {ok, State#state{fixed_indexes=false}}
+                true ->
+                    %% We no longer support reformatting legacy indexes, but we still watch
+                    %% and set the corresponding flag so as to support downgrades, and to error
+                    %% out if anyone ever tries to upgrade from <1.3.1 to >2.2 in one go.
+                    mark_indexes_fixed(State);
+                false ->
+                    ErrorMsg = "LevelDB backend not empty, but no tag found to indicate "
+                    "fixed index format. If you are upgrading from Riak version 1.3.0 or "
+                    "earlier, you must first downgrade to an intermediate version of Riak "
+                    "that supports the riak-admin reformat-indexes command, and use that "
+                    "command to update your index format before upgrading to this version. ",
+                    lager:alert(ErrorMsg),
+                    {error, missing_index_version_info}
             end
     end.
 
-mark_indexes_fixed_on_start(State) ->
-    case mark_indexes_fixed(State, true) of
-        {error, Reason, _} -> {error, Reason};
-        Res -> Res
+mark_indexes_fixed(State=#state{ref=Ref, write_opts=WriteOpts}) ->
+    Updates = [{put, to_md_key(?FIXED_INDEXES_KEY), <<1>>}],
+    case eleveldb:write(Ref, Updates, WriteOpts) of
+        ok ->
+            {ok, State};
+        {error, Reason} ->
+            {error, Reason}
     end.
 
 %% @doc Stop the eleveldb backend
@@ -171,28 +187,19 @@ get(Bucket, Key, #state{read_opts=ReadOpts,
     end.
 
 %% @doc Insert an object into the eleveldb backend.
--type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
--spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
+-spec put(riak_object:bucket(), riak_object:key(), [riak_kv_backend:index_spec()], binary(), state()) ->
                  {ok, state()} |
                  {error, term(), state()}.
-put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
-                                                write_opts=WriteOpts,
-                                                legacy_indexes=WriteLegacy,
-                                                fixed_indexes=FixedIndexes}=State) ->
+put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref, write_opts=WriteOpts}=State) ->
     %% Create the KV update...
     StorageKey = to_object_key(Bucket, PrimaryKey),
     Updates1 = [{put, StorageKey, Val} || Val /= undefined],
 
     %% Convert IndexSpecs to index updates...
     F = fun({add, Field, Value}) ->
-                case WriteLegacy of
-                    true ->
-                        [{put, to_legacy_index_key(Bucket, PrimaryKey, Field, Value), <<>>}];
-                    false ->
-                        [{put, to_index_key(Bucket, PrimaryKey, Field, Value), <<>>}]
-                end;
+                [{put, to_index_key(Bucket, PrimaryKey, Field, Value), <<>>}];
            ({remove, Field, Value}) ->
-                index_deletes(FixedIndexes, Bucket, PrimaryKey, Field, Value)
+                index_deletes(Bucket, PrimaryKey, Field, Value)
         end,
     Updates2 = lists:flatmap(F, IndexSpecs),
 
@@ -204,12 +211,35 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
             {error, Reason, State}
     end.
 
+iterator_open(DbRef, Options) ->
+    eleveldb:iterator(DbRef, Options).
+
+iterator_close(Itr) ->
+    eleveldb:iterator_close(Itr).
+
+iterator_move(Itr, Pos) ->
+    eleveldb:iterator_move(Itr, Pos).
+
 async_put(Context, Bucket, PrimaryKey, Val, #state{ref=Ref, write_opts=WriteOpts}=State) ->
     StorageKey = to_object_key(Bucket, PrimaryKey),
     eleveldb:async_put(Ref, Context, StorageKey, Val, WriteOpts),
     {ok, State}.
 
-indexes_fixed(#state{ref=Ref,read_opts=ReadOpts}) ->
+indexes_fixed(State) ->
+    %% This provides an escape hatch that we can use to override the
+    %% fixed_indexes check on startup, in case a customer somehow gets into
+    %% a weird situation where that metadata key is missing on an otherwise
+    %% healthy instance of leveldb:
+    case app_helper:get_env(riak_kv, override_fixed_indexes_check, false) of
+        false ->
+            get_indexes_fixed_from_db(State);
+        true ->
+            lager:notice("override_fixed_indexes_check set to true; overriding fixed index "
+                         "formatting check during eleveldb backend startup"),
+            true
+    end.
+
+get_indexes_fixed_from_db(#state{ref=Ref,read_opts=ReadOpts}) ->
     case eleveldb:get(Ref, to_md_key(?FIXED_INDEXES_KEY), ReadOpts) of
         {ok, <<1>>} ->
             true;
@@ -221,98 +251,15 @@ indexes_fixed(#state{ref=Ref,read_opts=ReadOpts}) ->
             {error, Reason}
     end.
 
-index_deletes(FixedIndexes, Bucket, PrimaryKey, Field, Value) ->
+index_deletes(Bucket, PrimaryKey, Field, Value) ->
     IndexKey = to_index_key(Bucket, PrimaryKey, Field, Value),
-    LegacyKey = to_legacy_index_key(Bucket, PrimaryKey, Field, Value),
-    KeyDelete = [{delete, IndexKey}],
-    LegacyDelete = [{delete, LegacyKey}
-                    || FixedIndexes =:= false andalso IndexKey =/= LegacyKey],
-    KeyDelete ++ LegacyDelete.
-
-fix_index(IndexKeys, ForUpgrade, #state{ref=Ref,
-                                                read_opts=ReadOpts,
-                                                write_opts=WriteOpts} = State)
-                                        when is_list(IndexKeys) ->
-    FoldFun =
-        fun(ok, {Success, Ignore, Error}) ->
-               {Success+1, Ignore, Error};
-           (ignore, {Success, Ignore, Error}) ->
-               {Success, Ignore+1, Error};
-           ({error, _}, {Success, Ignore, Error}) ->
-               {Success, Ignore, Error+1}
-        end,
-    Totals =
-        lists:foldl(FoldFun, {0,0,0},
-                    [fix_index(IndexKey, ForUpgrade, Ref, ReadOpts, WriteOpts)
-                        || {_Bucket, IndexKey} <- IndexKeys]),
-    {reply, Totals, State};
-fix_index(IndexKey, ForUpgrade, #state{ref=Ref,
-                                                read_opts=ReadOpts,
-                                                write_opts=WriteOpts} = State) ->
-    case fix_index(IndexKey, ForUpgrade, Ref, ReadOpts, WriteOpts) of
-        Atom when is_atom(Atom) ->
-            {Atom, State};
-        {error, Reason} ->
-            {error, Reason, State}
-    end.
-
-fix_index(IndexKey, ForUpgrade, Ref, ReadOpts, WriteOpts) ->
-    case eleveldb:get(Ref, IndexKey, ReadOpts) of
-        {ok, _} ->
-            case from_index_key(IndexKey) of
-                {Bucket, Key, Field, Value} ->
-
-                    NewKey = case ForUpgrade of
-                                 true -> to_index_key(Bucket, Key, Field, Value);
-                                 false -> to_legacy_index_key(Bucket, Key, Field, Value)
-                             end,
-                    Updates = [{delete, IndexKey}, {put, NewKey, <<>>}],
-                    case eleveldb:write(Ref, Updates, WriteOpts) of
-                        ok ->
-                            ok;
-                        {error, Reason} ->
-                            {error, Reason}
-                    end;
-                ignore ->
-                    ignore
-            end;
-        not_found ->
-            ignore;
-        {error, Reason} ->
-            {error, Reason}
-    end.
-
-mark_indexes_fixed(State=#state{fixed_indexes=true}, true) ->
-    {ok, State};
-mark_indexes_fixed(State=#state{fixed_indexes=false}, false) ->
-    {ok, State};
-mark_indexes_fixed(State=#state{ref=Ref, write_opts=WriteOpts}, ForUpgrade) ->
-    Value = case ForUpgrade of
-                true -> <<1>>;
-                false -> <<0>>
-            end,
-    Updates = [{put, to_md_key(?FIXED_INDEXES_KEY), Value}],
-    case eleveldb:write(Ref, Updates, WriteOpts) of
-        ok ->
-            {ok, State#state{fixed_indexes=ForUpgrade}};
-        {error, Reason} ->
-            {error, Reason, State}
-    end.
-
-set_legacy_indexes(State, WriteLegacy) ->
-    State#state{legacy_indexes=WriteLegacy}.
-
--spec fixed_index_status(state()) -> boolean().
-fixed_index_status(#state{fixed_indexes=Fixed}) ->
-    Fixed.
+    [{delete, IndexKey}].
 
 %% @doc Delete an object from the eleveldb backend
--spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
+-spec delete(riak_object:bucket(), riak_object:key(), [riak_kv_backend:index_spec()], state()) ->
                     {ok, state()} |
                     {error, term(), state()}.
-delete(Bucket, PrimaryKey, IndexSpecs, #state{ref=Ref,
-                                              write_opts=WriteOpts,
-                                              fixed_indexes=FixedIndexes}=State) ->
+delete(Bucket, PrimaryKey, IndexSpecs, #state{ref=Ref, write_opts=WriteOpts}=State) ->
 
     %% Create the KV delete...
     StorageKey = to_object_key(Bucket, PrimaryKey),
@@ -320,7 +267,7 @@ delete(Bucket, PrimaryKey, IndexSpecs, #state{ref=Ref,
 
     %% Convert IndexSpecs to index deletes...
     F = fun({remove, Field, Value}) ->
-                index_deletes(FixedIndexes, Bucket, PrimaryKey, Field, Value)
+                index_deletes(Bucket, PrimaryKey, Field, Value)
         end,
     Updates2 = lists:flatmap(F, IndexSpecs),
 
@@ -337,37 +284,96 @@ delete(Bucket, PrimaryKey, IndexSpecs, #state{ref=Ref,
                    [],
                    state()) -> {ok, any()} | {async, fun()}.
 fold_buckets(FoldBucketsFun, Acc, Opts, #state{fold_opts=FoldOpts,
-                                               ref=Ref}) ->
-    FoldFun = fold_buckets_fun(FoldBucketsFun),
-    FirstKey = to_first_key(undefined),
-    FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
-    BucketFolder =
-        fun() ->
-                try
-                    {FoldResult, _} =
-                        eleveldb:fold_keys(Ref, FoldFun, {Acc, []}, FoldOpts1),
-                    FoldResult
-                catch
-                    {break, AccFinal} ->
-                        AccFinal
-                end
-        end,
-    case lists:member(async_fold, Opts) of
+                                               ref=DbRef}) ->
+    Async = proplists:get_bool(async_fold, Opts),
+    BucketFolder = bucket_folder_fun(DbRef, FoldOpts, FoldBucketsFun, Acc),
+
+    case Async of
         true ->
             {async, BucketFolder};
         false ->
             {ok, BucketFolder()}
     end.
 
-%% @doc Fold over all the keys for one or all buckets.
+%%%% @private
+%%%% Return a function to fold over the buckets on this backend
+%% NOTE: There are some careful usages of `try...of` here
+%% because try...catch constructs can prevent tail call optimizations
+%% and make us run out of stack space on large folds.
+%% Work hard in this and other functions called in the code path
+%% to always return errors, rather than depending on an outer
+%% try...catch to handle issues.
+bucket_folder_fun(DbRef, Opts, FoldBucketsFun, Acc) ->
+    fun() ->
+        try eleveldb:iterator(DbRef, Opts, keys_only) of
+            {ok, Itr} ->
+                iterate_buckets(Itr, FoldBucketsFun, Acc)
+        catch Error ->
+            lager:debug("Could not open eleveldb iterator: ~p", [Error]),
+            throw(Error)
+        end
+    end.
+
+iterate_buckets(Itr, FoldBucketsFun, Acc) ->
+    Outcome = fold_list_buckets(undefined, Itr, FoldBucketsFun, Acc),
+    eleveldb:iterator_close(Itr),
+    case Outcome of
+        {error, _Err} = Error ->
+            throw(Error);
+        {break, _Res} = Result ->
+            throw(Result);
+        Result -> Result
+    end.
+
+
+fold_list_buckets(PrevBucket, Itr, FoldBucketsFun, Acc) ->
+    lager:debug("fold_list_buckets prev=~p~n", [PrevBucket]),
+    Seek = determine_next_bucket_seek(PrevBucket),
+    _Opts = [], %% For object listing, use iterator_prefetch option
+    try eleveldb:iterator_move(Itr, Seek) of
+        {error, invalid_iterator} ->
+            lager:debug( "DBG: NO_MORE_BUCKETS~n", []),
+            Acc;
+        {ok, BinaryBucketKey} ->
+            maybe_accumulate_bucket(from_object_key(BinaryBucketKey), PrevBucket, FoldBucketsFun, Acc, Seek, Itr)
+    catch Error ->
+        {error, {eleveldb_error, Error}}
+    end.
+
+maybe_accumulate_bucket(undefined, _PrevBucket, _FoldBucketsFun, Acc, _Seek, _Itr) ->
+    %% `undefined' means we got something other than {o, Bucket, Key} - iterated
+    %% past the end of objects, so stop iterating and return
+    Acc;
+maybe_accumulate_bucket(ignore, _PrevBucket, _FoldBucketsFun, Acc, _Seek, _Itr) ->
+    %% `ignore' means you got a corrupt bucket/key - should not get into this
+    %% case but we must stop iteration since we can't skip to next bucket.
+    lager:error("Encountered corrupt key while iterating buckets. Bucket list may be incomplete."),
+    Acc;
+maybe_accumulate_bucket({PrevBucket, _}, PrevBucket, _FoldBucketsFun, _Acc, _Seek, _Itr) ->
+    {error, did_not_skip_to_next_bucket};
+maybe_accumulate_bucket({NewBucket, _}, _PrevBucket, FoldBucketsFun, Acc, _Seek, Itr) ->
+    lager:debug("DBG: NEXT_BUCKET ~p~n", [NewBucket]),
+    try
+        NewAcc = FoldBucketsFun(NewBucket, Acc),
+        fold_list_buckets(NewBucket, Itr, FoldBucketsFun, NewAcc)
+    catch Error ->
+        {error, Error}
+    end.
+
+determine_next_bucket_seek(PrevBucket) ->
+    case PrevBucket of
+         undefined ->
+             to_first_key(undefined);
+         _ ->
+             to_next_bucket_key(PrevBucket)
+     end.
+
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
                 any(),
                 [{atom(), term()}],
                 state()) -> {ok, term()} | {async, fun()}.
-fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
-                                         fixed_indexes=FixedIdx,
-                                         legacy_indexes=WriteLegacyIdx,
-                                         ref=Ref}) ->
+%% @doc Fold over all the keys for one or all buckets.
+fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts, ref=Ref}) ->
     %% Figure out how we should limit the fold: by bucket, by
     %% secondary index, or neither (fold across everything.)
     Bucket = lists:keyfind(bucket, 1, Opts),
@@ -384,23 +390,15 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
     FirstKey = to_first_key(Limiter),
     FoldFun = fold_keys_fun(FoldKeysFun, Limiter),
     FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
-    ExtraFold = not FixedIdx orelse WriteLegacyIdx,
     KeyFolder =
         fun() ->
-            %% Do the fold. ELevelDB uses throw/1 to break out of a fold...
-            AccFinal =
-                       try
-                           eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
-                       catch
-                           {break, BrkResult} ->
-                               BrkResult
-                       end,
-            case ExtraFold of
-                true ->
-                    legacy_key_fold(Ref, FoldFun, AccFinal, FoldOpts1, Limiter);
-                false ->
-                    AccFinal
-            end
+                %% Do the fold. ELevelDB uses throw/1 to break out of a fold...
+                try
+                    eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
+                catch
+                    {break, BrkResult} ->
+                        BrkResult
+                end
         end,
     case lists:member(async_fold, Opts) of
         true ->
@@ -435,24 +433,6 @@ fold_indexes_fun(FoldIndexFun) ->
                     throw({break, Acc})
             end
     end.
-
-legacy_key_fold(Ref, FoldFun, Acc, FoldOpts0, Query={index, _, _}) ->
-    {_, FirstKey} = lists:keyfind(first_key, 1, FoldOpts0),
-    LegacyKey = to_legacy_first_key(Query),
-    case LegacyKey =/= FirstKey of
-        true ->
-            try
-                FoldOpts = lists:keyreplace(first_key, 1, FoldOpts0, {first_key, LegacyKey}),
-                eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts)
-            catch
-                {break, AccFinal} ->
-                    AccFinal
-            end;
-        false ->
-            Acc
-    end;
-legacy_key_fold(_Ref, _FoldFun, Acc, _FoldOpts, _Query) ->
-    Acc.
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
@@ -500,6 +480,16 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
             {ok, ObjectFolder()}
     end.
 
+-spec grouped_fold(FoldFun::riak_kv_backend:fold_objects_fun(),
+                   Acc::riak_kv_fold_buffer:buffer(),
+                   Opts::proplists:proplist(),
+                   State::#state{}) ->
+    {ok, any()} | {async, fun()}.
+grouped_fold(
+          FoldFun, Acc, Opts,
+          #state{fold_opts=FoldOpts, ref=DbRef}) ->
+    riak_kv_group_list:fold_objects(?MODULE, FoldFun, Acc, Opts, FoldOpts, DbRef).
+
 %% @doc Delete all objects from this eleveldb backend
 %% and return a fresh reference.
 -spec drop(state()) -> {ok, state()} | {error, term(), state()}.
@@ -538,10 +528,10 @@ is_empty_but_md(Ref, _ReadOpts, _WriteOpts) ->
 
 %% @doc Get the status information for this eleveldb backend
 -spec status(state()) -> [{atom(), term()}].
-status(State=#state{fixed_indexes=FixedIndexes}) ->
+status(State) ->
     {ok, Stats} = eleveldb:status(State#state.ref, <<"leveldb.stats">>),
     {ok, ReadBlockError} = eleveldb:status(State#state.ref, <<"leveldb.ReadBlockError">>),
-    [{stats, Stats}, {read_block_error, ReadBlockError}, {fixed_indexes, FixedIndexes}].
+    [{stats, Stats}, {read_block_error, ReadBlockError}].
 
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
@@ -658,22 +648,6 @@ config_value(Key, Config, Default) ->
     end.
 
 %% @private
-%% Return a function to fold over the buckets on this backend
-fold_buckets_fun(FoldBucketsFun) ->
-    fun(BK, {Acc, LastBucket}) ->
-            case from_object_key(BK) of
-                {LastBucket, _} ->
-                    {Acc, LastBucket};
-                {Bucket, _} ->
-                    {FoldBucketsFun(Bucket, Acc), Bucket};
-                ignore ->
-                    {Acc, LastBucket};
-                _ ->
-                    throw({break, Acc})
-            end
-    end.
-
-%% @private
 %% Return a function to fold over keys on this backend
 fold_keys_fun(FoldKeysFun, undefined) ->
     %% Fold across everything...
@@ -765,38 +739,6 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{return_terms=Term
                     throw({break, Acc})
             end
     end;
-fold_keys_fun(FoldKeysFun, {index, incorrect_format, ForUpgrade}) when is_boolean(ForUpgrade) ->
-    %% Over incorrectly formatted 2i index values
-    fun(StorageKey, Acc) ->
-            Action =
-                case from_index_key(StorageKey) of
-                    {Bucket, Key, Field, Term} ->
-                        NewKey = case ForUpgrade of
-                                     true ->
-                                         to_index_key(Bucket, Key, Field, Term);
-                                     false ->
-                                         to_legacy_index_key(Bucket, Key, Field, Term)
-                                 end,
-                        case NewKey =:= StorageKey of
-                            true  ->
-                                ignore;
-                            false ->
-                                {fold, Bucket, StorageKey}
-                        end;
-                    ignore ->
-                        ignore;
-                    _ ->
-                        stop
-                end,
-            case Action of
-                {fold, B, K} ->
-                    FoldKeysFun(B, K, Acc);
-                ignore ->
-                    Acc;
-                stop ->
-                    throw({break, Acc})
-            end
-    end;
 fold_keys_fun(FoldKeysFun, {index, Bucket, V1Q}) ->
     %% Handle legacy queries
     Q = riak_index:upgrade_query(V1Q),
@@ -840,7 +782,7 @@ fold_objects_fun(FoldObjectsFun, undefined) ->
             end
     end.
 
-%% @private Given a scope limiter, use sext to encode an expression
+%% @doc Given a scope limiter, use sext to encode an expression
 %% that represents the starting key for the scope. For example, since
 %% we store objects under {o, Bucket, Key}, the first key for the
 %% bucket "foo" would be `sext:encode({o, <<"foo">>, <<>>}).`
@@ -850,9 +792,6 @@ to_first_key(undefined) ->
 to_first_key({bucket, Bucket}) ->
     %% Start at the first object for a given bucket...
     to_object_key(Bucket, <<>>);
-to_first_key({index, incorrect_format, ForUpgrade}) when is_boolean(ForUpgrade) ->
-    %% Start at first index entry
-    to_index_key(<<>>, <<>>, <<>>, <<>>);
 %% V2 indexes
 to_first_key({index, Bucket,
               ?KV_INDEX_Q{filter_field=Field,
@@ -870,13 +809,10 @@ to_first_key({index, Bucket, Q}) ->
 to_first_key(Other) ->
     erlang:throw({unknown_limiter, Other}).
 
-% @doc If index query, encode key using legacy sext format.
-to_legacy_first_key({index, Bucket, {eq, Field, Term}}) ->
-    to_legacy_first_key({index, Bucket, {range, Field, Term, Term}});
-to_legacy_first_key({index, Bucket, {range, Field, StartTerm, _EndTerm}}) ->
-    to_legacy_index_key(Bucket, <<>>, Field, StartTerm);
-to_legacy_first_key(Other) ->
-    to_first_key(Other).
+to_next_bucket_key({BucketType, Bucket}=_Bucket) ->
+    to_object_key({BucketType, <<Bucket/binary, 0>>}, <<>>);
+to_next_bucket_key(Bucket) ->
+    to_object_key(<<Bucket/binary, 0>>, <<>>).
 
 to_object_key(Bucket, Key) ->
     sext:encode({o, Bucket, Key}).
@@ -894,9 +830,6 @@ from_object_key(LKey) ->
 
 to_index_key(Bucket, Key, Field, Term) ->
     sext:encode({i, Bucket, Field, Term, Key}).
-
-to_legacy_index_key(Bucket, Key, Field, Term) -> %% encode with legacy bignum encoding
-    sext:encode({i, Bucket, Field, Term, Key}, true).
 
 from_index_key(LKey) ->
     case (catch sext:decode(LKey)) of

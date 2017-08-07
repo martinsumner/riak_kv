@@ -33,17 +33,21 @@
          cancel_exchanges/0,
          get_lock/1,
          get_lock/2,
+         get_lock/3,
          release_lock/1,
          requeue_poke/1,
          start_exchange_remote/3,
          start_exchange_remote/4,
          exchange_status/4,
+         maybe_add_sweep_participant/0,
          expire_trees/0,
          clear_trees/0,
          get_version/0,
          get_partition_version/1,
          get_pending_version/0,
+         get_upgraded/0,
          get_trees_version/0]).
+
 -export([all_pairwise_exchanges/2]).
 -export([throttle/0,
          get_aae_throttle/0,
@@ -61,7 +65,7 @@
          terminate/2, code_change/3]).
 
 -ifdef(TEST).
--export([query_and_set_aae_throttle/1]).        % for eunit twiddle-testing
+-export([query_and_set_aae_throttle/1, do_get_lock/4]).        % for eunit twiddle-testing
 -export([make_state/0, get_last_throttle/1]).   % for eunit twiddle-testing
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -74,12 +78,17 @@
 -type version() :: legacy | non_neg_integer().
 -type orddict(Key, Val) :: [{Key, Val}].
 
+-record(lock, {pid :: pid(),
+               ref :: reference(),
+               index :: non_neg_integer(),
+               type :: atom()
+              }).
+
 -record(state, {mode           = automatic :: automatic | manual,
                 trees          = []        :: orddict(index(), pid()),
                 tree_queue     = []        :: orddict(index(), pid()),
                 trees_version  = []        :: orddict(index(), version()),
-                locks          = []        :: [{pid(), reference()}],
-                build_tokens   = 0         :: non_neg_integer(),
+                locks          = []        :: [#lock{}],
                 exchange_queue = []        :: [exchange()],
                 exchanges      = []        :: [{index(), reference(), pid()}],
                 vnode_status_pid = undefined :: 'undefined' | pid(),
@@ -91,7 +100,7 @@
 -type state() :: #state{}.
 
 -define(DEFAULT_CONCURRENCY, 2).
--define(DEFAULT_BUILD_LIMIT, {1, 3600000}). %% Once per hour
+-define(DEFAULT_BUILD_CONCURRENCY, 1).
 -define(KV_ENTROPY_LOCK_TIMEOUT, app_helper:get_env(riak_kv, anti_entropy_lock_timeout, 10000)).
 -define(AAE_THROTTLE_KEY, aae_throttle).
 -define(DEFAULT_AAE_THROTTLE_LIMITS,
@@ -116,10 +125,17 @@ get_lock(Type) ->
 %%      the lock with the provided pid.
 -spec get_lock(any(), pid()) -> ok | max_concurrency.
 get_lock(Type, Pid) ->
-    gen_server:call(?MODULE, {get_lock, Type, Pid}, ?KV_ENTROPY_LOCK_TIMEOUT).
+    get_lock(Type, Pid, undefined).
 
--spec release_lock(pid()) -> ok.
-release_lock(Pid) ->
+-spec get_lock(any(), pid(), index() | undefined) -> ok | max_concurrency.
+get_lock(Type, Pid, Index) ->
+    gen_server:call(?MODULE, {get_lock, Type, Pid, Index}, ?KV_ENTROPY_LOCK_TIMEOUT).
+
+-spec release_lock(pid() | non_neg_integer()) -> ok.
+release_lock(Index) when is_integer(Index) ->
+    gen_server:call(?MODULE, {release_lock, Index}, infinity);
+
+release_lock(Pid) when is_pid(Pid) ->
     gen_server:cast(?MODULE, {release_lock, Pid}).
 
 %% @doc Acquire the necessary locks for an entropy exchange with the specified
@@ -212,6 +228,25 @@ enable() ->
 disable() ->
     gen_server:call(?MODULE, disable, infinity).
 
+maybe_add_sweep_participant() ->
+    case enabled() of
+        true ->
+            add_sweep_participant();
+        _ ->
+            ok
+    end.
+
+add_sweep_participant() ->
+    %% Expire time in ms run interval in s
+    RunInterval = fun() -> riak_kv_index_hashtree:get_expire_time() / 1000 end,
+    riak_kv_sweeper:add_sweep_participant(_Description = "KV AAE tree rebuild",
+                                          _Module = riak_kv_index_hashtree,
+                                          _FunType = observe_fun,
+                                          RunInterval,
+                                          _Options = [bucket_props]).
+
+remove_sweep_participant() ->
+    riak_kv_sweeper:remove_sweep_participant(riak_kv_index_hashtree).
 
 -spec expire_trees() -> ok.
 expire_trees() ->
@@ -241,7 +276,21 @@ get_partition_version(Index) ->
 
 -spec get_pending_version() -> version().
 get_pending_version() ->
-    gen_server:call(?MODULE, get_pending_version, infinity).
+    case ets:lookup(?ETS, pending_version) of
+        [] ->
+            legacy;
+        [{pending_version, Version}] ->
+            Version
+    end.
+
+-spec get_upgraded() -> boolean().
+get_upgraded() ->
+    case {get_version(), get_pending_version()} of
+        {legacy, legacy} ->
+            false;
+        _ ->
+            true
+    end.
 
 %% For testing to quickly verify tree versions match up with manager version
 -spec get_trees_version() -> [{index(), version()}].
@@ -300,9 +349,9 @@ init([]) ->
                    locks=[],
                    exchanges=[],
                    exchange_queue=[]},
-    State2 = reset_build_tokens(State),
-    schedule_reset_build_tokens(),
-    {ok, State2}.
+    maybe_add_sweep_participant(),
+
+    {ok, State}.
 
 register_capabilities() ->
     riak_core_capability:register({riak_kv, object_hash_version},
@@ -327,12 +376,20 @@ handle_call({manual_exchange, Exchange}, _From, State) ->
 handle_call(enable, _From, State) ->
     {_, Opts} = settings(),
     application:set_env(riak_kv, anti_entropy, {on, Opts}),
+    maybe_add_sweep_participant(),
     {reply, ok, State};
 handle_call(disable, _From, State) ->
     {_, Opts} = settings(),
+    remove_sweep_participant(),
     application:set_env(riak_kv, anti_entropy, {off, Opts}),
     _ = [riak_kv_index_hashtree:stop(T) || {_,T} <- State#state.trees],
     {reply, ok, State};
+handle_call({get_lock, Type, Pid, Index}, _From, State) ->
+    {Reply, State2} = do_get_lock(Type, Pid, Index, State),
+    {reply, Reply, State2};
+handle_call({release_lock, Index}, _From, State) ->
+    State2 = maybe_release_lock(Index, State),
+    {reply, ok, State2};
 handle_call(get_version, _From, State=#state{version=Version}) ->
     {reply, Version, State};
 handle_call(get_pending_version, _From, State=#state{pending_version=Version}) ->
@@ -340,9 +397,6 @@ handle_call(get_pending_version, _From, State=#state{pending_version=Version}) -
 handle_call(get_trees_version, _From, State=#state{trees=Trees}) ->
     VTrees = [{Idx, riak_kv_index_hashtree:get_version(Pid)} || {Idx, Pid} <- Trees],
     {reply, VTrees, State};
-handle_call({get_lock, Type, Pid}, _From, State) ->
-    {Reply, State2} = do_get_lock(Type, Pid, State),
-    {reply, Reply, State2};
 %% To support compatibility with pre 2.2 nodes.
 handle_call({start_exchange_remote, FsmPid, Index, IndexN}, From, State) ->
     do_start_exchange_remote(FsmPid, Index, IndexN, legacy, From, State);
@@ -388,10 +442,6 @@ handle_cast(_Msg, State) ->
 handle_info(tick, State) ->
     State1 = maybe_tick(State),
     {noreply, State1};
-handle_info(reset_build_tokens, State) ->
-    State2 = reset_build_tokens(State),
-    schedule_reset_build_tokens(),
-    {noreply, State2};
 handle_info({{hashtree_pid, Index}, Reply}, State) ->
     case Reply of
         {ok, Pid} when is_pid(Pid) ->
@@ -439,16 +489,6 @@ clear_all_trees(Trees) ->
 expire_all_trees(Trees) ->
     _ = [riak_kv_index_hashtree:expire(TPid) || {_, TPid} <- Trees],
     ok.
-
-schedule_reset_build_tokens() ->
-    {_, Reset} = app_helper:get_env(riak_kv, anti_entropy_build_limit,
-                                    ?DEFAULT_BUILD_LIMIT),
-    erlang:send_after(Reset, self(), reset_build_tokens).
-
-reset_build_tokens(State) ->
-    {Tokens, _} = app_helper:get_env(riak_kv, anti_entropy_build_limit,
-                                     ?DEFAULT_BUILD_LIMIT),
-    State#state{build_tokens=Tokens}.
 
 -spec settings() -> {boolean(), proplists:proplist()}.
 settings() ->
@@ -507,9 +547,9 @@ add_hashtree_pid(true, Index, Pid, State=#state{trees=Trees, trees_version=VTree
             State4
     end.
 
--spec do_get_lock(any(),pid(),state())
+-spec do_get_lock(any(),pid(), non_neg_integer(), state())
                  -> {ok | max_concurrency | build_limit_reached, state()}.
-do_get_lock(Type, Pid, State=#state{locks=Locks}) ->
+do_get_lock(Type, Pid, Index, State=#state{locks=Locks}) ->
     Concurrency = app_helper:get_env(riak_kv,
                                      anti_entropy_concurrency,
                                      ?DEFAULT_CONCURRENCY),
@@ -517,37 +557,55 @@ do_get_lock(Type, Pid, State=#state{locks=Locks}) ->
         true ->
             {max_concurrency, State};
         false ->
-            case check_lock_type(Type, State) of
-                {ok, State2} ->
+            case check_lock_type(Type, Locks) of
+                ok ->
                     Ref = monitor(process, Pid),
-                    State3 = State2#state{locks=[{Pid,Ref}|Locks]},
-                    {ok, State3};
+                    NewLock = #lock{pid = Pid, ref = Ref, index = Index, type = Type},
+                    State2 = State#state{locks=[NewLock | Locks]},
+                    {ok, State2};
                 Error ->
                     {Error, State}
             end
     end.
+
+check_lock_type(build, Locks) ->
+    Limit = app_helper:get_env(riak_kv, anti_entropy_build_concurrency, ?DEFAULT_BUILD_CONCURRENCY),
+    NumLocks = get_nr_of_locks(build, Locks) + get_nr_of_locks(upgrade, Locks),
+    case NumLocks >= Limit of
+        true ->
+            build_limit_reached;
+        false ->
+            ok
+    end;
+check_lock_type(_Type, _Locks) ->
+    ok.
+
+get_nr_of_locks(Type, Locks) ->
+    Pred = fun(Lock) -> Lock#lock.type =:= Type end,
+    riak_core_util:count(Pred, Locks).
 
 -spec do_start_exchange_remote(pid(), index(), index_n(), version(), term(), state())
                   -> {reply, term(), state()} | {noreply, state()}.
 do_start_exchange_remote(FsmPid, Index, IndexN, Version, From, State) ->
     Enabled = enabled(),
     TreeResult = orddict:find(Index, State#state.trees),
-    maybe_start_exchange_remote(Enabled, TreeResult, FsmPid, IndexN, Version, From, State).
+    maybe_start_exchange_remote(Enabled, TreeResult, FsmPid, Index, IndexN, Version, From, State).
 
 -spec maybe_start_exchange_remote(Enabled::boolean(),
                                   TreeResult::{ok, term()} | error,
                                   FsmPid::pid(),
+                                  Index::index(),
                                   IndexN::index_n(),
                                   Version::version(),
                                   From::term(),
                                   State::state()) ->
     {noreply, state()} | {reply, term(), state()}.
-maybe_start_exchange_remote(false, _, _FsmPid, _IndexN, _Version, _From, State) ->
+maybe_start_exchange_remote(false, _, _FsmPid, _Index, _IndexN, _Version, _From, State) ->
     {reply, {remote_exchange, anti_entropy_disabled}, State};
-maybe_start_exchange_remote(_, error, _FsmPid,  _IndexN, _Version, _From, State) ->
+maybe_start_exchange_remote(_, error, _FsmPid,  _Index, _IndexN, _Version, _From, State) ->
     {reply, {remote_exchange, not_built}, State};
-maybe_start_exchange_remote(true, {ok, Tree}, FsmPid, IndexN, Version, From, State) ->
-    case do_get_lock(exchange_remote, FsmPid, State) of
+maybe_start_exchange_remote(true, {ok, Tree}, FsmPid, Index, IndexN, Version, From, State) ->
+    case do_get_lock(exchange_remote, FsmPid, Index, State) of
         {ok, State2} ->
             %% Concurrency lock acquired, now forward to index_hashtree
             %% to acquire tree lock.
@@ -557,29 +615,12 @@ maybe_start_exchange_remote(true, {ok, Tree}, FsmPid, IndexN, Version, From, Sta
             {reply, {remote_exchange, Reply}, State2}
     end.
 
-
--spec check_lock_type(any(), state()) -> build_limit_reached | {ok, state()}.
-check_lock_type(Type, State) ->
-    case Type of
-        build->
-            do_get_build_token(State);
-        upgrade ->
-            do_get_build_token(State);
-        _ ->
-            {ok, State}
-    end.
-
--spec do_get_build_token(state()) -> build_limit_reached | {ok, state()}.
-do_get_build_token(State=#state{build_tokens=Tokens}) ->
-    if Tokens > 0 ->
-            {ok, State#state{build_tokens=Tokens-1}};
-       true ->
-            build_limit_reached
-    end.
-
--spec maybe_release_lock(reference(), state()) -> state().
-maybe_release_lock(Ref, State) ->
-    Locks = lists:keydelete(Ref, 2, State#state.locks),
+-spec maybe_release_lock(reference() |non_neg_integer(), state()) -> state().
+maybe_release_lock(Ref, State) when is_reference(Ref) ->
+    Locks = lists:keydelete(Ref, #lock.ref, State#state.locks),
+    State#state{locks=Locks};
+maybe_release_lock(Index, State) when is_number(Index) ->
+    Locks = lists:keydelete(Index, #lock.index, State#state.locks),
     State#state{locks=Locks}.
 
 -spec maybe_clear_exchange(reference(), term(), state()) -> state().
@@ -678,30 +719,58 @@ maybe_start_upgrade(_Ring, State) ->
     State.
 
 -spec maybe_upgrade(state()) -> state().
+maybe_upgrade(State=#state{trees_version = []}) ->
+    %% No hashtrees have registered with the manager, skip upgrade check
+    State;
 maybe_upgrade(State=#state{trees_version = VTrees}) ->
     case [Idx || {Idx, legacy} <- VTrees] of
         %% Upgrade is done already, set version in state
         [] ->
             ets:insert(?ETS, {version, 0}),
             State#state{version=0};
-        %% No trees have been upgraded, need to wait for exchanges
+        %% No trees have been upgraded, check version
+        %% on other nodes to see if we should immediately start upgrade.
+        %% Otherwise wait for all local and remote exchanges to complete.
         Trees when length(Trees) == length(VTrees) ->
-            check_exchanges_and_upgrade(State);
+            check_remote_upgraded(State);
         %% Upgrade already started, set pending_version
         _ ->
+            lager:notice("Hashtree upgrade already in-process, setting pending_version to 0"),
+            ets:insert(?ETS, {pending_version, 0}),
             State#state{pending_version=0}
     end.
 
--spec check_exchanges_and_upgrade(state()) -> state().
-check_exchanges_and_upgrade(State) ->
+check_remote_upgraded(State) ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    Nodes = riak_core_ring:all_members(Ring),
+    case lists:any(fun do_check_remote_upgraded/1, Nodes) of
+        true ->
+            lager:notice("Starting AAE hashtree upgrade"),
+            ets:insert(?ETS, {pending_version, 0}),
+            State#state{pending_version=0};
+        _ ->
+            check_exchanges_and_upgrade(State, Nodes)
+    end.
+
+do_check_remote_upgraded(Node) ->
+    case riak_core_util:safe_rpc(Node, riak_kv_entropy_manager, get_upgraded, [], 10000) of
+        Result when is_boolean(Result) ->
+            Result;
+        {badrpc, _Reason} ->
+            false;
+        _ ->
+            false
+    end.
+
+-spec check_exchanges_and_upgrade(state(), list()) -> state().
+check_exchanges_and_upgrade(State, Nodes) ->
     case riak_kv_entropy_info:all_sibling_exchanges_complete() of
         true ->
             %% Now check nodes who havent reported success in the ETS table
-            {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-            Nodes = riak_core_ring:all_members(Ring),
             case check_all_remote_exchanges_complete(Nodes) of
                 true ->
                     lager:notice("Starting AAE hashtree upgrade"),
+                    ets:insert(?ETS, {pending_version, 0}),
                     State#state{pending_version=0};
                 _ ->
                     State
@@ -727,7 +796,7 @@ maybe_check_and_record_remote_exchange(Node) ->
 
 -spec check_remote_exchange(node()) -> boolean().
 check_remote_exchange(Node) ->
-    case rpc:call(Node, riak_kv_entropy_info, all_sibling_exchanges_complete, [], 10000) of
+    case riak_core_util:safe_rpc(Node, riak_kv_entropy_info, all_sibling_exchanges_complete, [], 10000) of
         Result when is_boolean(Result) ->
             Result;
         {badrpc, _Reason} ->
@@ -753,6 +822,7 @@ check_upgrade(State=#state{pending_version=PendingVersion,trees_version=VTrees})
                 Trees when length(Trees) == length(VTrees) ->
                     lager:notice("Local AAE hashtrees have completed upgrade to version: ~p",[PendingVersion]),
                     ets:insert(?ETS, {version, PendingVersion}),
+                    ets:insert(?ETS, {pending_version, legacy}),
                     State#state{version=PendingVersion, pending_version=legacy};
                 _Trees ->
                     State

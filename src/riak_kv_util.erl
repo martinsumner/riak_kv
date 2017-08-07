@@ -25,7 +25,9 @@
 -module(riak_kv_util).
 
 
--export([is_x_deleted/1,
+-export([is_x_expired/1,
+         is_x_expired/2,
+         is_x_deleted/1,
          obj_not_deleted/1,
          try_cast/3,
          fallback/4,
@@ -34,9 +36,8 @@
          normalize_rw_value/2,
          make_request/2,
          get_index_n/1,
+         get_index_n/2,
          preflist_siblings/1,
-         fix_incorrect_index_entries/1,
-         fix_incorrect_index_entries/0,
          responsible_preflists/1,
          responsible_preflists/2,
          make_vtag/1,
@@ -55,6 +56,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
+-include("riak_kv_wm_raw.hrl").
+
 -type riak_core_ring() :: riak_core_ring:riak_core_ring().
 -type index() :: non_neg_integer().
 -type index_n() :: {index(), pos_integer()}.
@@ -62,6 +65,50 @@
 %% ===================================================================
 %% Public API
 %% ===================================================================
+
+%% @spec is_x_expired(riak_object:riak_object()) -> boolean()
+%% @doc 'true' if all contents of the input object are marked
+%%      as expired; 'false' otherwise
+
+is_x_expired(Obj) ->
+    is_x_expired(Obj, undefined).
+
+%% Used by the sweeper that include cached bucket props.
+is_x_expired(Obj, BucketProps) ->
+    Now = os:timestamp(),
+    case [{M, V} || {M, V} <- riak_object:get_contents(Obj),
+                    not expired(Now, M, Obj, BucketProps)] of
+        [] -> true;
+        _ -> false
+    end.
+
+expired(Now, MetaData, Obj, BucketProps) ->
+    case dict:find(?MD_TTL, MetaData) of
+        {ok, TTL} ->
+            expired_ttl(MetaData, TTL, Now);
+        _ ->
+            expired_by_bucket_ttl(MetaData, riak_object:bucket(Obj), BucketProps, Now)
+    end.
+
+expired_by_bucket_ttl(Metadata, Bucket, undefined, Now) ->
+        case riak_core_bucket:get_bucket(Bucket) of
+            BucketProps when is_list(BucketProps) ->
+                expired_by_bucket_ttl(Metadata, Bucket, BucketProps, Now);
+            _ ->
+                false
+        end;
+
+expired_by_bucket_ttl(Metadata, _Bucket, BucketProps, Now) ->
+    case proplists:get_value(ttl, BucketProps) of
+        undefined ->
+            false;
+        TTL ->
+            expired_ttl(Metadata, TTL, Now)
+    end.
+
+expired_ttl(MetaData, TTL, Now) ->
+    LastMod = dict:fetch(?MD_LASTMOD, MetaData),
+    timer:now_diff(Now, LastMod) div 1000000 > TTL.
 
 %% @spec is_x_deleted(riak_object:riak_object()) -> boolean()
 %% @doc 'true' if all contents of the input object are marked
@@ -187,6 +234,9 @@ get_write_once(Bucket) ->
 -spec get_index_n({binary(), binary()}) -> index_n().
 get_index_n({Bucket, Key}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
+    get_index_n({Bucket, Key}, BucketProps).
+%% @doc Given a bucket/key and BucketProps, determine the associated preflist index_n.
+get_index_n({Bucket, Key}, BucketProps) ->
     N = proplists:get_value(n_val, BucketProps),
     ChashKey = riak_core_util:chash_key({Bucket, Key}),
     {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
@@ -245,115 +295,6 @@ responsible_preflists_n(RevIndices, N) ->
 -spec determine_max_n(riak_core_ring()) -> pos_integer().
 determine_max_n(Ring) ->
     lists:max(riak_core_bucket:all_n(Ring)).
-
-
-fix_incorrect_index_entries() ->
-    fix_incorrect_index_entries([]).
-
-fix_incorrect_index_entries(Opts) when is_list(Opts) ->
-    MaxN = proplists:get_value(concurrency, Opts, 2),
-    ForUpgrade = not proplists:get_value(downgrade, Opts, false),
-    BatchSize = proplists:get_value(batch_size, Opts, 100),
-    lager:info("index reformat: starting with concurrency: ~p, batch size: ~p, for upgrade: ~p",
-               [MaxN, BatchSize, ForUpgrade]),
-    IdxList = [Idx || {riak_kv_vnode, Idx, _} <- riak_core_vnode_manager:all_vnodes()],
-    FixOpts = [{batch_size, BatchSize}, {downgrade, not ForUpgrade}],
-    F = fun(X) -> fix_incorrect_index_entries(X, FixOpts) end,
-    Counts = riak_core_util:pmap(F, IdxList, MaxN),
-    {SuccessCounts, IgnoredCounts, ErrorCounts} = lists:unzip3(Counts),
-    SuccessTotal = lists:sum(SuccessCounts),
-    IgnoredTotal = lists:sum(IgnoredCounts),
-    ErrorTotal = lists:sum(ErrorCounts),
-    case ErrorTotal of
-        0 ->
-            lager:info("index reformat: complete on all partitions. Fixed: ~p, Ignored: ~p",
-                       [SuccessTotal, IgnoredTotal]);
-        _ ->
-            lager:info("index reformat: encountered ~p errors reformatting keys. Please re-run",
-                       [ErrorTotal])
-    end,
-    {SuccessTotal, IgnoredTotal, ErrorTotal}.
-
-fix_incorrect_index_entries(Idx, FixOpts) ->
-    fix_incorrect_index_entries(Idx, fun fix_incorrect_index_entry/4, {0, 0, 0}, FixOpts).
-
-fix_incorrect_index_entries(Idx, FixFun, Acc0, FixOpts) ->
-    Ref = make_ref(),
-    ForUpgrade = not proplists:get_value(downgrade, FixOpts, false),
-    lager:info("index reformat: querying partition ~p for index entries to reformat", [Idx]),
-    riak_core_vnode_master:command({Idx, node()},
-                                   {get_index_entries, FixOpts},
-                                   {raw, Ref, self()},
-                                   riak_kv_vnode_master),
-    case process_incorrect_index_entries(Ref, Idx, ForUpgrade, FixFun, Acc0) of
-        ignore -> Acc0;
-        {_,_,ErrorCount}=Res ->
-            MarkRes = mark_indexes_reformatted(Idx, ErrorCount, ForUpgrade),
-            case MarkRes of
-                error ->
-                    %% there was an error marking the partition as reformatted. treat this like
-                    %% any other error (indicating the need to re-run reformatting)
-                    {element(1, Res), element(2, Res), 1};
-                _ -> Res
-            end
-    end.
-
-fix_incorrect_index_entry(Idx, ForUpgrade, BadKeys, {Success, Ignore, Error}) ->
-    Res = riak_core_vnode_master:sync_command({Idx, node()},
-                                              {fix_incorrect_index_entry, BadKeys, ForUpgrade},
-                                              riak_kv_vnode_master),
-    case Res of
-        ok ->
-            {Success+1, Ignore, Error};
-        ignore ->
-            {Success, Ignore+1, Error};
-        {error, _} ->
-            {Success, Ignore, Error+1};
-        {S, I, E} ->
-            {Success+S, Ignore+I, Error+E}
-    end.
-
-%% needs to take an acc to count success/error/ignore
-process_incorrect_index_entries(Ref, Idx, ForUpgrade, FixFun, {S, I, E} = Acc) ->
-    receive
-        {Ref, {error, Reason}} ->
-            lager:error("index reformat: error on partition ~p: ~p", [Idx, Reason]),
-            {S, I, E+1};
-        {Ref, ignore} ->
-            lager:info("index reformat: ignoring partition ~p", [Idx]),
-            ignore;
-        {Ref, done} ->
-            lager:info("index reformat: finished with partition ~p, Fixed=~p, Ignored=~p, Errors=~p", [Idx, S, I, E]),
-            Acc;
-        {Ref, {Pid, BatchRef, Keys}} ->
-            {NS, NI, NE} = NextAcc = FixFun(Idx, ForUpgrade, Keys, Acc),
-            ReportN = 10000,
-            case ((NS+NI+NE) div ReportN) /= ((S+I+E) div ReportN) of
-               true ->
-                    lager:info("index reformat: reformatting partition ~p, Fixed=~p, Ignore=~p, Error=~p", [Idx, NS, NI, NE]);
-                false ->
-                    ok
-            end,
-            ack_incorrect_keys(Pid, BatchRef),
-            process_incorrect_index_entries(Ref, Idx, ForUpgrade, FixFun, NextAcc)
-    after
-        120000 ->
-            lager:error("index reformat: timed out waiting for response from partition ~p",
-                        [Idx]),
-            {S, I, E+1}
-    end.
-
-ack_incorrect_keys(Pid, Ref) ->
-    Pid ! {ack_keys, Ref}.
-
-mark_indexes_reformatted(Idx, 0, ForUpgrade) ->
-    riak_core_vnode_master:sync_command({Idx, node()},
-                                        {fix_incorrect_index_entry, {done, ForUpgrade}},
-                                        riak_kv_vnode_master),
-    lager:info("index reformat: marked partition ~p as fixed", [Idx]),
-    ok;
-mark_indexes_reformatted(_Idx, _ErrorCount, _ForUpgrade) ->
-    undefined.
 
 -ifndef(old_hash).
 md5(Bin) ->
@@ -457,6 +398,47 @@ deleted_test() ->
            riak_object:update_metadata(
              O, dict:store(<<"X-Riak-Deleted">>, true, MD))),
     true = is_x_deleted(O1).
+
+setup_bucket_props() ->
+    meck:new(riak_core_bucket),
+    meck:expect(riak_core_bucket, get_bucket,
+                fun(<<"test-ttl">>) -> [{ttl, 1}];
+                   (<<"test-non-ttl">>) -> []
+                end),
+    ok.
+
+teardown_bucket_props(_) ->
+             meck:unload(riak_core_bucket).
+
+
+object_expired_test() ->
+    setup_bucket_props(),
+    ObjectTTL = riak_object:new(<<"test-ttl">>, <<"k">>, "v"),
+    ObjectTTL1 = riak_object:apply_updates(riak_object:update_last_modified(ObjectTTL)),
+    timer:sleep(timer:seconds(1)),
+    false = is_x_expired(ObjectTTL1),
+    MD = riak_object:get_metadata(ObjectTTL1),
+    ObjectTTL2 = riak_object:apply_updates(
+                   riak_object:update_metadata(
+                     ObjectTTL1, dict:store(?MD_TTL, 0, MD))),
+    ?assertEqual(true, is_x_expired(ObjectTTL2)),
+    teardown_bucket_props(pass).
+
+bucket_ttl_expired_test() ->
+    setup_bucket_props(),
+    ObucketTTL = riak_object:new(<<"test-ttl">>, <<"k_bucket_ttl">>, "v"),
+    ObucketTTL1 = riak_object:apply_updates(riak_object:update_last_modified(ObucketTTL)),
+    timer:sleep(timer:seconds(3)),
+    ?assertEqual(true ,is_x_expired(ObucketTTL1)),
+    teardown_bucket_props(pass).
+
+non_ttl_bucket_test() ->
+    setup_bucket_props(),
+    ObucketNonTTL = riak_object:new(<<"test-non-ttl">>, <<"k_bucket_non-ttl">>, "v"),
+    ObucketNonTTL1 = riak_object:apply_updates(riak_object:update_last_modified(ObucketNonTTL)),
+    timer:sleep(timer:seconds(3)),
+    ?assertEqual(false, is_x_expired(ObucketNonTTL1)),
+    teardown_bucket_props(pass).
 
 make_vtag_test() ->
     crypto:start(),
