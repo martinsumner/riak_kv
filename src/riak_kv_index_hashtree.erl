@@ -971,9 +971,9 @@ do_compare(Id, Remote, AccFun, Acc, From, State) ->
 
 -spec do_poke(state()) -> state().
 do_poke(State) ->
-    State1 = maybe_rebuild(maybe_expire(State)),
-    State2 = maybe_build(State1),
-    State3 = maybe_upgrade(State2),
+    State1 = maybe_upgrade(State),
+    State2 = maybe_rebuild(maybe_expire(State1)),
+    State3 = maybe_build(State2),
     State3.
 
 -spec maybe_upgrade(state()) -> state().
