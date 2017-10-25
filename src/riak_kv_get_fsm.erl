@@ -506,7 +506,7 @@ read_repair(Indices, RepairObj,
             #state{req_id = ReqId, starttime = StartTime,
                    preflist2 = Sent, bkey = BKey, crdt_op = CrdtOp,
                    bucket_props = BucketProps, trace = Trace}) ->
-    RepairPreflist = [{Idx, Node} || {{Idx, Node}, _Type} <- Sent,
+    RepairPreflist = [{Idx, Node} || {{Idx, Node}, primary} <- Sent,
                                      get_option(Idx, Indices) /= undefined],
     case Trace of
         true ->
