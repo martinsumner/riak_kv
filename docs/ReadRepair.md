@@ -47,7 +47,7 @@ Setup:
 - First 60s of data excluded from results
 - 3 runs per test - average for each 10s period taken
 
-[Basho Bench script](riakc_rr.cfg).
+[Basho Bench script](riakc_rr.config).
 
 # Conclusion
 
