@@ -36,6 +36,19 @@ It can be seen from the test results, that despite the failure of the node, the 
 
 With the modified code, the handoff period was 47% shorter (17 minutes rather than 32 minutes).  During the handoff substantially less data was transferred (33GB and 2.2M objects with read repair to fallbacks, 11 GB and 750K objects with read repair to primary only).
 
+## Test details
+
+Setup:
+
+- 5 x i2.2x large
+- Ring size 64
+- leveldb backend, not active anti-entropy, no replication
+- Pre-populated load - each test run started from same backup of pre-populated load
+- First 60s of data excluded from results
+- 3 runs per test - average for each 10s period taken
+
+[Basho Bench script](riakc_rr.cfg).
+
 # Conclusion
 
 As expected the small change to read repair does have a positive impact on throughput during failover, and leads to reduced handoff time.  However the deficit on throughput during failover with read repair to fallbacks enabled is not catastrophic.  The new behaviour is better in this performance test, but the performance of the old behaviour isn't obviously intolerable.
