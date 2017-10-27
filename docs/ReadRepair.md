@@ -33,7 +33,7 @@ There were three tests run, with each tets undergoing three runs with the averag
 
 It can be seen from the test results, that despite the failure of the node, the modified code supported throughput consistently within a reasonable margin of error of the control code.  However, with the failure on standard KV code there was a deficit on throughtput of between 7% and 10% on the control during the failure window, and a small 2% deficit on throughput whilst the handoffs were completed.
 
-![Read Repair Chart](/images/ReadRepairChart.png)
+![Read Repair Chart](images/ReadRepairChart.png "Read Repair Chart")
 
 With the modified code, the handoff period was 47% shorter (17 minutes rather than 32 minutes).  During the handoff substantially less data was transferred (33GB and 2.2M objects with read repair to fallbacks, 11 GB and 750K objects with read repair to primary only).
 
