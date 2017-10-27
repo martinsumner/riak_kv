@@ -30,7 +30,7 @@ There were three tests, with each test undergoing three runs with the average re
 - A test when the failure occurred on standard Riak KV 2.2.3 code (blue trendline in chart);
 - A test when the failure occurred - but the code was [modified](https://github.com/martinsumner/riak_kv/blob/mas-2.1.7-readrepairprimary/src/riak_kv_get_fsm.erl#L509) so as to only update primaries (red trendline in chart).
 
-It can be seen from the test results, that despite the failure of the node, the modified code supported throughput consistently within a reasonable margin of error of the control code.  However, with the failure on standard KV code there was a deficit on throughtput of between 7% and 10% on the control during the failure window, and a small 2% deficit on throughput whilst the handoffs were completed.
+It can be seen from the test results, that despite the failure of the node, the modified code supported throughput consistently within a reasonable margin of error of the control code.  However, with the failure, on standard KV code there was a deficit on throughtput of between 7% and 10% on the control during the failure window, and a small 2% deficit on throughput whilst the handoffs were completed.
 
 ![Read Repair Chart](images/ReadRepairChart.png "Read Repair Chart")
 
