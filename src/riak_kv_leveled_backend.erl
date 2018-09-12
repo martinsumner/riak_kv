@@ -241,7 +241,7 @@ delete(Bucket, Key, IndexSpecs, #state{bookie=Bookie}=State) ->
                    [],
                    state()) -> {ok, any()} | {async, fun()}.
 fold_buckets(FoldBucketsFun, Acc, Opts, #state{bookie=Bookie}) ->
-    ListBucketQ = {binary_bucketlist, ?RIAK_TAG, {FoldBucketsFun, Acc}},
+    ListBucketQ = {bucket_list, ?RIAK_TAG, {FoldBucketsFun, Acc}},
     {async, Folder} = leveled_bookie:book_returnfolder(Bookie, ListBucketQ),
     case lists:member(async_fold, Opts) of
         true ->
@@ -429,7 +429,7 @@ drop(#state{bookie=Bookie, partition=Partition, config=Config}=_State) ->
 -spec is_empty(state()) -> boolean().
 is_empty(#state{bookie=Bookie}) ->
     FoldBucketsFun = fun(B, Acc) -> sets:add_element(B, Acc) end,
-    ListBucketQ = {binary_bucketlist,
+    ListBucketQ = {bucket_list,
                     ?RIAK_TAG,
                     {FoldBucketsFun, sets:new()}},
     {async, Folder} = leveled_bookie:book_returnfolder(Bookie, ListBucketQ),
