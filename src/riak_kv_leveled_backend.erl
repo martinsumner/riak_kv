@@ -54,7 +54,7 @@
                         fold_heads,
                         snap_prefold,
                         hot_backup,
-                        leveled]).
+                        native_tictac]).
 -define(API_VERSION, 1).
 -define(BUCKET_SDG, <<"MD">>).
 -define(KEY_SDG, <<"SHUDOWN_GUID">>).

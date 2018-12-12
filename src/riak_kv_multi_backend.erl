@@ -77,13 +77,26 @@
          mark_indexes_fixed/2,
          fixed_index_status/1]).
 
+%% Extended KV Backend API for leveled features
+-export([head/3,
+            fold_heads/4]).
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, [async_fold, index_reformat]).
+-define(CAPABILITIES, [async_fold]).
+    % Capablites multi_backend always has.  `index_reformat` has been removed
+    % as it is now a legacy capability
 -define(ANY_CAPABILITIES, [indexes, iterator_refresh]).
+    % Capabilities which multi_backend should hold even if not every backend
+    % has this capability (although at least one must have it)
+-define(NEVER_CAPABILITES, [native_tictac]).
+    % Even if all backends have this capability, treat as if the multi_backend
+    % doesn't have the capability.
+    % TODO: Enhance the aae_keystore so that it can support multiple bookie
+    % PIDs as a native backend
 
 -record (state, {backends :: [{atom(), atom(), term()}], % [{BackendName, BackendModule, SubState}]
                  default_backend :: atom()}).
@@ -114,11 +127,12 @@ capabilities(State) ->
     AllCaps = [F(Mod, ModState) || {_, Mod, ModState} <- State#state.backends],
     Caps1 = ordsets:intersection(AllCaps),
     Caps2 = ordsets:to_list(Caps1),
+    Caps3 = lists:subtract(Caps2, ?NEVER_CAPABILITES),
 
     % Some caps we choose if ANY backend has them
     AnyCaps = ordsets:intersection(ordsets:union(AllCaps),
                                     ordsets:from_list(?ANY_CAPABILITIES)),
-    Capabilities = lists:usort(?CAPABILITIES ++ Caps2 ++ AnyCaps),
+    Capabilities = lists:usort(?CAPABILITIES ++ Caps3 ++ AnyCaps),
     {ok, Capabilities}.
 
 %% @doc Return the capabilities of the backend.
@@ -226,6 +240,23 @@ get(Bucket, Key, State) ->
             {error, Reason, NewState}
     end.
 
+-spec head(riak_object:bucket(), riak_object:key(), state()) ->
+                 {ok, any(), state()} |
+                 {ok, not_found, state()} |
+                 {error, term(), state()}.
+%% @doc Retrieve the object metadata from the backend
+%% No head/3 call should be made unless all backends have the `head` capability 
+head(Bucket, Key, State) ->
+    {Name, Module, SubState} = get_backend(Bucket, State),
+    case Module:head(Bucket, Key, SubState) of
+        {ok, Value, NewSubState} ->
+            NewState = update_backend_state(Name, Module, NewSubState, State),
+            {ok, Value, NewState};
+        {error, Reason, NewSubState} ->
+            NewState = update_backend_state(Name, Module, NewSubState, State),
+            {error, Reason, NewState}
+    end.
+
 %% @doc Insert an object with secondary index
 %% information into the kv backend
 -type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
@@ -286,6 +317,11 @@ fold_keys(FoldKeysFun, Acc, Opts, State) ->
             fold_in_bucket(Bucket, fold_keys, FoldKeysFun, Acc, Opts, State)
     end.
 
+%% QUERY: folds that lead to fold_all were implemented prior to snapshot
+%% backend capability.  If the folds are called in series, without
+%% snap_prefold what does that mean about the relative point in time of the
+%% fold overall?
+
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
                    any(),
@@ -299,6 +335,21 @@ fold_objects(FoldObjectsFun, Acc, Opts, State) ->
         Bucket ->
             fold_in_bucket(Bucket, fold_objects, FoldObjectsFun, Acc, Opts, State)
     end.
+
+%% @doc Fold over all the heads for one or all buckets.
+-spec fold_heads(riak_kv_backend:fold_objects_fun(),
+                   any(),
+                   [{atom(), term()}],
+                   state()) -> {ok, any()} | {async, fun()} | {error, term()}.
+fold_heads(FoldObjectsFun, Acc, Opts, State) ->
+    case proplists:get_value(bucket, Opts) of
+        undefined ->
+            fold_all(fold_heads, FoldObjectsFun, Acc, Opts, State,
+                    fun default_backend_filter/5);
+        Bucket ->
+            fold_in_bucket(Bucket, fold_heads, FoldObjectsFun, Acc, Opts, State)
+    end.
+
 
 %% @doc Delete all objects from the different backends
 -spec drop(state()) -> {ok, state()} | {error, term(), state()}.
