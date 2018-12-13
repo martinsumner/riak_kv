@@ -538,7 +538,11 @@ callback(Ref, compact_journal, State) ->
                                         State#state.compactions_perday,
                                         State#state.valid_hours),
              {ok, State}
-    end.
+    end;
+callback(_Ref, _OtherMessage, State) ->
+    % When running multibackend need to ignore other callbacks - as all
+    % callbacks got to all backends
+    {ok, State}.
 
 %% ===================================================================
 %% Internal functions
