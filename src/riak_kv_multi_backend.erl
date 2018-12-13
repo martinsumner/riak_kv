@@ -89,7 +89,7 @@
 -define(CAPABILITIES, [async_fold]).
     % Capablites multi_backend always has.  `index_reformat` has been removed
     % as it is now a legacy capability
--define(ANY_CAPABILITIES, [indexes, iterator_refresh]).
+-define(ANY_CAPABILITIES, [indexes, iterator_refresh, head, fold_heads]).
     % Capabilities which multi_backend should hold even if not every backend
     % has this capability (although at least one must have it)
 -define(NEVER_CAPABILITES, [native_tictac]).
@@ -248,13 +248,21 @@ get(Bucket, Key, State) ->
 %% No head/3 call should be made unless all backends have the `head` capability 
 head(Bucket, Key, State) ->
     {Name, Module, SubState} = get_backend(Bucket, State),
-    case Module:head(Bucket, Key, SubState) of
-        {ok, Value, NewSubState} ->
-            NewState = update_backend_state(Name, Module, NewSubState, State),
-            {ok, Value, NewState};
-        {error, Reason, NewSubState} ->
-            NewState = update_backend_state(Name, Module, NewSubState, State),
-            {error, Reason, NewState}
+    {ok, ModCaps} = Module:capabilities(SubState),
+    case lists:member(head, ModCaps) of
+        true ->
+            case Module:head(Bucket, Key, SubState) of
+                {ok, Value, NewSubState} ->
+                    NewState =
+                        update_backend_state(Name, Module, NewSubState, State),
+                    {ok, Value, NewState};
+                {error, Reason, NewSubState} ->
+                    NewState =
+                        update_backend_state(Name, Module, NewSubState, State),
+                    {error, Reason, NewState}
+            end;
+        false ->
+            get(Bucket, Key, State)
     end.
 
 %% @doc Insert an object with secondary index
@@ -599,13 +607,22 @@ backend_fold_fun(ModFun, FoldFun, Opts, AsyncFold, BackendFilter) ->
             %% Get the backend capabilities to determine
             %% if it supports asynchronous folding.
             {ok, ModCaps} = Module:capabilities(SubState),
+            ModFun0 = 
+                case {ModFun, lists:member(fold_heads, ModCaps)} of
+                    {fold_heads, false} ->
+                        % A backend supports fold_heads but not this one, so
+                        % use fold_objects for the fold on this backend
+                        fold_objects;
+                    _ ->
+                        ModFun
+                end,
             DoAsync = AsyncFold andalso lists:member(async_fold, ModCaps),
             case BackendFilter(Opts, Name, Module, SubState, ModCaps) of
                 false ->
                     {Acc, WorkList};
                 true ->
                     backend_fold_fun(Module,
-                                     ModFun,
+                                     ModFun0,
                                      SubState,
                                      FoldFun,
                                      Opts,
