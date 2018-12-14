@@ -151,6 +151,9 @@
 
 %% @doc Specifies the storage engine used for Riak's key-value data
 %% and secondary indexes (if supported).
+%% Caution should be taken when choosing 'multi' backend, as there may be 
+%% unexpected side effects of this choice due to the need to merge capabilities
+%% across backends.  'prefix_multi' is reserved for use in riak cs.
 {mapping, "storage_backend", "riak_kv.storage_backend", [
   {default, {{storage_backend}} },
   {datatype, {enum, [bitcask, leveldb, leveled, memory, multi, prefix_multi]}}
