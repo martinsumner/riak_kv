@@ -20,6 +20,10 @@
 
 -behaviour(gen_server).
 
+-compile({nowarn_deprecated_function, 
+            [{gen_fsm, send_event, 2}]}).
+
+
 %% API
 -export([start_link/1, put/2, workers/0]).
 -export([init/1,
@@ -259,9 +263,9 @@ send_vnodes([{{Idx, Node}, Type}|Rest], Proxies, Bucket, Key, EncodedVal, ReqId)
     {Proxy, NewProxies} = get_proxy(Idx, Proxies),
     Message = riak_kv_requests:new_w1c_put_request({Bucket, Key}, EncodedVal, Type),
     gen_fsm:send_event(
-        {Proxy, Node},
-        riak_core_vnode_master:make_request(Message, {raw, ReqId, self()}, Idx)
-    ),
+            {Proxy, Node},
+            riak_core_vnode_master:make_request(Message, {raw, ReqId, self()}, Idx)
+        ),
     send_vnodes(Rest, NewProxies, Bucket, Key, EncodedVal, ReqId).
 
 

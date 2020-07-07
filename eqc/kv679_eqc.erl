@@ -26,7 +26,7 @@
 -include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--compile(export_all).
+-compile([export_all, nowarn_export_all]).
 
 -define(P1, p1).
 -define(REPLICAS, [p2, p3, f1, f2, f3]).
@@ -55,14 +55,6 @@
         eqc:on_output(fun(Str, Args) ->
                               io:format(user, Str, Args) end, P)).
 
-eqc_test_() ->
-    {setup,
-     fun setup/0,
-     fun(_) ->
-             teardown()
-     end,
-     {timeout, 120, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(50, ?QC_OUT(prop_merge()))))}
-    }.
 
 run() ->
     run(?NUMTESTS).
@@ -253,42 +245,46 @@ weight(_S, _) ->
 %% @doc check that no writes are lost
 -spec prop_merge() -> eqc:property().
 prop_merge() ->
-    ?FORALL(Cmds, commands(?MODULE),
-            begin
-                %% Store the state external to the statem for correct
-                %% shrinking. This is best practice.
-                (catch ets:delete(?MODULE)),
-                ets:new(?MODULE, [public, named_table, set, {keypos, #replica.id}]),
-                set_up_replicas(),
+    ?SETUP(fun() ->
+                setup(),
+                fun teardown/0
+            end,
+            ?FORALL(Cmds, commands(?MODULE),
+                    begin
+                        %% Store the state external to the statem for correct
+                        %% shrinking. This is best practice.
+                        (catch ets:delete(?MODULE)),
+                        ets:new(?MODULE, [public, named_table, set, {keypos, #replica.id}]),
+                        set_up_replicas(),
 
-                {H, S=#state{values=Values}, Res} = run_commands(?MODULE,Cmds),
+                        {H, S=#state{values=Values}, Res} = run_commands(?MODULE,Cmds),
 
-                MergedObjects =
-                    lists:foldl(fun(#replica{data=Data}, Acc) ->
-                                        orddict:merge(fun(_Key, O1, O2) ->
-                                                              riak_object:reconcile([O1, O2], true)
-                                                      end,
-                                                      Data,
-                                                      Acc)
-                                end,
-                                orddict:new(),
-                                ets:tab2list(?MODULE)),
+                        MergedObjects =
+                            lists:foldl(fun(#replica{data=Data}, Acc) ->
+                                                orddict:merge(fun(_Key, O1, O2) ->
+                                                                    riak_object:reconcile([O1, O2], true)
+                                                            end,
+                                                            Data,
+                                                            Acc)
+                                        end,
+                                        orddict:new(),
+                                        ets:tab2list(?MODULE)),
 
-                ExpectedSiblingValues = derive_sibling_list(Values),
+                        ExpectedSiblingValues = derive_sibling_list(Values),
 
-                ets:delete(?MODULE),
+                        ets:delete(?MODULE),
 
-                pretty_commands(?MODULE, Cmds, {H, S, Res},
-                                aggregate(
-                                  command_names(Cmds),
-                                  conjunction([
-                                               {result, Res == ok},
-                                               {equal, results_equal(MergedObjects, ExpectedSiblingValues)}
-                                              ]
-                                             )
-                                 )
-                               )
-            end).
+                        pretty_commands(?MODULE, Cmds, {H, S, Res},
+                                        aggregate(
+                                        command_names(Cmds),
+                                        conjunction([
+                                                    {result, Res == ok},
+                                                    {equal, results_equal(MergedObjects, ExpectedSiblingValues)}
+                                                    ]
+                                                    )
+                                        )
+                                    )
+                    end)).
 
 
 
@@ -448,7 +444,7 @@ replica_put(VId, Epoch, {ok, LocalObj}, IncomingObject) ->
 
 %% like vclock:timestamp() but monotinically increasing
 timestamp() ->
-    {A, B, C} = erlang:now(),
+    {A, B, C} = erlang:timestamp(),
     (A*1000000 + B)*1000000 + C.
 
 %% copied from riak_kv_vnode, for shame

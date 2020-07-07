@@ -40,12 +40,17 @@
             fold_heads/4,
             return_self/1]).
 
-
 -include("riak_kv_index.hrl").
+
+-ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
+-export([prop_leveled_backend/0]).
+-endif.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
+
 
 -define(RIAK_TAG, o_rkv).
 -define(CAPABILITIES, [always_v1obj,
@@ -104,6 +109,7 @@ capabilities(_, _) ->
 start(Partition, Config) ->
     DataRoot = app_helper:get_prop_or_env(data_root, Config, leveled),
     MJS = app_helper:get_prop_or_env(journal_size, Config, leveled),
+    MJC = app_helper:get_prop_or_env(journal_objectcount, Config, leveled),
     BCS = app_helper:get_prop_or_env(cache_size, Config, leveled),
     PCS = app_helper:get_prop_or_env(penciller_cache_size, Config, leveled),
     SYS = app_helper:get_prop_or_env(sync_strategy, Config, leveled),
@@ -118,24 +124,52 @@ start(Partition, Config) ->
     TOS = app_helper:get_prop_or_env(snapshot_timeout_short, Config, leveled),
     TOL = app_helper:get_prop_or_env(snapshot_timeout_long, Config, leveled),
     LOL = app_helper:get_prop_or_env(log_level, Config, leveled),
+    PCL = app_helper:get_prop_or_env(ledger_pagecachelevel, Config, leveled),
 
     BackendPause = app_helper:get_env(riak_kv, backend_pause_ms, ?PAUSE_TIME),
+    LCR = app_helper:get_env(riak_kv, leveled_reload_recalc, false),
 
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
+            DBid = generate_partition_identity(Partition),
+            FN = filename:join(DataDir, "recalc.lock"),
+            {ok, ReloadStrategy} = 
+                case {LCR, filelib:is_file(FN)} of
+                    {true, true} ->
+                        {ok, recalc};
+                    {true, false} ->
+                        ok = filelib:ensure_dir(FN),
+                        ok = file:write_file(FN, term_to_binary(os:timestamp())),
+                        {ok, recalc};
+                    {false, true} ->
+                        {ok, TS} = file:read_file(FN),
+                        LockTS = calendar:now_to_datetime(binary_to_term(TS)),
+                        lager:error("Cannot start in retain mode " ++
+                                        "due to recalc being set on ~w " ++
+                                        "see FN ~s",
+                                        [LockTS, FN]),
+                        {error, invalid_compaction_change};
+                    {false, false} ->
+                        {ok, retain}
+                end,
+
             StartOpts = [{root_path, DataDir},
                             {max_journalsize, MJS},
+                            {max_journalobjectcount, MJC},
                             {cache_size, BCS},
                             {max_pencillercachesize, PCS},
+                            {ledger_preloadpagecache_level, PCL},
                             {sync_strategy, SYS},
                             {compression_method, CMM},
                             {compression_point, CMP},
                             {log_level, LOL},
                             {max_run_length, MRL},
+                            {database_id, DBid},
                             {maxrunlength_compactionpercentage, MCP},
                             {singlefile_compactionpercentage, SCP},
                             {snapshot_timeout_short, TOS},
-                            {snapshot_timeout_long, TOL}],
+                            {snapshot_timeout_long, TOL},
+                            {reload_strategy, [{?RIAK_TAG, ReloadStrategy}]}],
             {ok, Bookie} = leveled_bookie:book_start(StartOpts),
             Ref = make_ref(),
             ValidHours = valid_hours(CLH, CTH),
@@ -357,7 +391,15 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
     {async, ObjectFolder} =
         case {lists:keyfind(bucket, 1, Opts), 
                 lists:keyfind(index, 1, Opts)} of
-            {_, {index, FilterBucket, Q=?KV_INDEX_Q{}}} ->
+            {_, {index,
+                    FilterBucket,
+                    Q=?KV_INDEX_Q{start_key=StartKey0,
+                                    start_inclusive=StartInc}}} ->
+                StartKey = 
+                    case StartInc of
+                        true -> StartKey0;
+                        false -> leveled_codec:next_key(StartKey0)
+                    end,
                 % This is an undocumented thing - required by CS
                 % Copied as far as possible from eleveldb backend - as actual
                 % requirements not known
@@ -368,6 +410,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                         false ->
                             false
                     end,
+                
                 SpecialFoldFun = 
                     fun(ObjB, ObjK, Obj, InnerAcc) ->
                         case riak_index:object_key_in_range({ObjB, ObjK}, 
@@ -375,24 +418,46 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                             {true, _BK} ->
                                 case StndObjFold of   
                                     true ->
-                                        FoldObjectsFun(ObjB, ObjK, Obj, 
+                                        FoldObjectsFun(ObjB,
+                                                        ObjK,
+                                                        Obj, 
                                                         InnerAcc);
                                     false ->
                                         % Assumption here is that if this is 
                                         % not flagged as a standard object fold
                                         % it is using a fold_keys_fun -
                                         % so the object is disguised as a key
-                                        FoldObjectsFun(ObjB, {o, ObjK, Obj}, 
+                                        FoldObjectsFun(ObjB,
+                                                        {o, ObjK, Obj}, 
                                                         InnerAcc)
                                 end;
                             {skip, _BK} ->
-                                Acc
+                                InnerAcc;
+                            _ ->
+                                % This is expected when object_key_in_range
+                                % returns false - such as when the end of
+                                % range is reached.  An end key could be used
+                                % in the query - but control over end_inclusive
+                                % is gained by instead relying on this range
+                                % check.
+                                %
+                                % This aligns with riak_kv_eleveldb_backend.
+                                % Throw will be handled within riak_kv_worker
+                                % as throw:PrematureAcc - as leveled will
+                                % re-throw, and not expect {break, Acc} to
+                                % re-throw as with eleveldb
+                                throw(InnerAcc)
                         end
                     end,
+                EndKey = null,
+                % StartKey and StartInclusive based on query, but the EndKey
+                % and EndInclusive should be handled by the passed in fold
+                % function (by the riak_index range checker), so null is used
+                % for EndKey
                 leveled_bookie:book_objectfold(Bookie, 
                                                 ?RIAK_TAG,
                                                 FilterBucket, 
-                                                all, 
+                                                {StartKey, EndKey},
                                                 {SpecialFoldFun, Acc}, 
                                                 false);
             {false, false} ->
@@ -553,7 +618,12 @@ callback(Ref, compact_journal, State) ->
                                         State#state.compactions_perday,
                                         State#state.valid_hours),
              {ok, State}
-    end.
+    end;
+callback(Ref, UnexpectedCallback, State) ->
+    lager:info("Ignoring unexpected callback ~w with ref ~w " ++
+                "may be expected if multi-backend",
+                [UnexpectedCallback, Ref]),
+    {ok, State}.
 
 %% ===================================================================
 %% Internal functions
@@ -576,9 +646,6 @@ get_data_dir(DataRoot, Partition) ->
 %% Request a callback in the future to check for journal compaction
 -spec schedule_journalcompaction(reference(), integer(), integer(), list(integer())) -> reference().
 schedule_journalcompaction(Ref, PartitionID, PerDay, ValidHours) when is_reference(Ref) ->
-    random:seed(element(3, os:timestamp()),
-                    erlang:phash2(self()),
-                    PartitionID),
     Interval = leveled_iclerk:schedule_compaction(ValidHours,
                                                     PerDay,
                                                     os:timestamp()),
@@ -612,6 +679,18 @@ valid_hours(LowHour, HighHour) when LowHour > HighHour ->
 valid_hours(LowHour, HighHour) ->
     lists:seq(LowHour, HighHour).
 
+-ifdef(EQC).
+    generate_partition_identity(_Partition) ->
+        0.
+-else.
+    generate_partition_identity(Partition) ->
+        {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
+        PartitionCount = chashbin:num_partitions(CHBin),
+        RingIndexInc = chash:ring_increment(PartitionCount),
+        Partition div RingIndexInc.
+-endif.
+
+
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
@@ -619,40 +698,35 @@ valid_hours(LowHour, HighHour) ->
 
 -ifdef(EQC).
 
-eqc_test_() ->
-    {spawn,
-     [{inorder,
-       [{setup,
-         fun setup/0,
-         fun cleanup/1,
-         [
-          {timeout, 180,
-           [?_assertEqual(true,
-                          begin
-                              DepsDir = riak_kv_schema_tests:get_deps_dir(),
-                              Schema = filename:join(DepsDir, "leveled/priv/leveled.schema"),
-                              ?debugFmt("Loading schema from ~p~n", [Schema]),
-                              %% load leveled schema to get the defaults
-                              [{leveled, Conf}] = cuttlefish_unit:generate_config(
-                                                    [Schema],
-                                                    [
-                                                     {["leveled","data_root"], "test/leveled-backend"}
-                                                    ]),
-                              backend_eqc:test(?MODULE, false, Conf)
-                          end
-                         )
-           ]}]}]}]}. %% <--- hahahaha, erlang/eunit, wat?
-
-setup() ->
-    application:load(sasl),
-    application:set_env(sasl, sasl_error_logger, {file, "riak_kv_leveled_backend_eqc_sasl.log"}),
-    error_logger:tty(false),
-    error_logger:logfile({open, "riak_kv_leveled_backend_eqc.log"}),
-
-    ok.
-
-cleanup(_) ->
-    ?_assertCmd("rm -rf test/leveled-backend").
+prop_leveled_backend() ->
+    Path = riak_kv_test_util:get_test_dir("leveled-backend"),
+    ?SETUP(fun() ->
+                   application:load(sasl),
+                   application:set_env(sasl,
+                                        sasl_error_logger,
+                                        {file, Path ++ "/riak_kv_leveled_backend_eqc_sasl.log"}),
+                   error_logger:tty(false),
+                   error_logger:logfile({open, Path ++ "/riak_kv_leveled_backend_eqc.log"}),
+                   fun() -> ?assertCmd("rm -rf " ++ Path ++ "/*") end
+           end,
+           backend_eqc:prop_backend(?MODULE,
+                                    false,
+                                    [{data_root, Path},
+                                        {cache_size, 100},
+                                        {penciller_cache_size, 1000},
+                                        {sync_strategy, none},
+                                        {compression_method, native},
+                                        {compression_point, on_receipt},
+                                        {compaction_runs_perday, 1},
+                                        {compaction_low_hour, 1},
+                                        {compaction_top_hour, 23},
+                                        {max_run_length, 2},
+                                        {maxrunlength_compactionpercentage, 70.0},
+                                        {singlefile_compactionpercentage, 50.0},
+                                        {snapshot_timeout_short, 900},
+                                        {snapshot_timeout_long, 3600},
+                                        {log_level, error},
+                                        {journal_objectcount, 100}])).
 
 -endif. % EQC
 

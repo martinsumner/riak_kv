@@ -29,7 +29,6 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% Public API
--compile(export_all).
 -export([test/1,
          test/2,
          test/3,
@@ -51,7 +50,7 @@
          postcondition/5]).
 
 %% eqc property
--export([prop_backend/4]).
+-export([prop_backend/1, prop_backend/2, prop_backend/3, prop_backend/4]).
 
 %% States
 -export([stopped/1,
@@ -60,7 +59,10 @@
 %% Helpers
 -export([drop/2,
          delete/5,
+         async_put/5,
          init_backend/3]).
+
+-export([fold_keys/5, check/1, check2/1]).
 
 -define(TEST_SECONDS, 120).
 
@@ -73,8 +75,11 @@
                i=ordsets:new()}). % List of indexes
 
 %% ====================================================================
-%% Public API
+%% eqc property
 %% ====================================================================
+
+prop_backend(Backend) ->
+    prop_backend(Backend, false).
 
 test(Backend) ->
     test2(property(Backend, false)).
@@ -102,14 +107,6 @@ test_with_options(Backend, Ops) when is_list(Ops) ->
     TestingTime = proplists:get_value(testing_time, Ops, ?TEST_SECONDS),
     test2(property(Backend, Volatile, Config, Cleanup, TestingTime)).
 
-cleanup_fun(Backend) ->
-    fun(BeState,_Olds) -> catch(Backend:stop(BeState)) end.
-
-check2(Prop) ->
-    eqc:check(Prop).
-
-test2(Prop) ->
-    eqc:quickcheck(Prop).
 
 property(Backend) ->
     property(Backend, false).
@@ -128,9 +125,22 @@ property(Backend, Volatile, Config, Cleanup, NumSeconds) ->
     eqc:testing_time(NumSeconds,
                      prop_backend(Backend, Volatile, Config, Cleanup)).
 
-%% ====================================================================
-%% eqc property
-%% ====================================================================
+
+cleanup_fun(Backend) ->
+    fun(BeState,_Olds) -> catch(Backend:stop(BeState)) end.
+
+check2(Prop) ->
+    eqc:check(Prop).
+
+test2(Prop) ->
+    eqc:quickcheck(Prop).
+
+prop_backend(Backend, Volatile) ->
+    prop_backend(Backend, Volatile, []).
+
+prop_backend(Backend, Volatile, Config) ->
+    prop_backend(Backend, Volatile, Config, fun(BeState,_Olds) ->
+                                            catch(Backend:stop(BeState)) end).
 
 prop_backend(Backend, Volatile, Config, Cleanup) ->
     ?FORALL(Cmds,
@@ -274,7 +284,7 @@ fold_objects_fun() ->
     end.
 
 get_partition() ->
-    {MegaSecs, Secs, MicroSecs} = erlang:now(),
+    {MegaSecs, Secs, MicroSecs} = os:timestamp(),
     Partition = integer_to_list(MegaSecs) ++
         integer_to_list(Secs) ++
         integer_to_list(MicroSecs),
@@ -302,7 +312,13 @@ init_backend(Backend, _Volatile, Config) ->
         undefined ->
             ok;
         OldPoolPid ->
-            riak_core_vnode_worker_pool:stop(OldPoolPid, normal)
+            %try riak_core_vnode_worker_pool:stop(OldPoolPid, normal) of
+                %_ -> ok
+            %catch
+                %_:_ ->
+                    unlink(OldPoolPid),
+                    exit(OldPoolPid, kill)
+            %end
     end,
     %% Store the info about the worker pool
     erlang:put(worker_pool, PoolPid),

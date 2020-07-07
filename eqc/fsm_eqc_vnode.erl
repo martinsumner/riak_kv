@@ -28,7 +28,13 @@
 
 -module(fsm_eqc_vnode).
 -behaviour(gen_fsm).
--include_lib("riak_kv_vnode.hrl").
+-include("include/riak_kv_vnode.hrl").
+
+-compile({nowarn_deprecated_function, 
+            [{gen_fsm, start_link, 3},
+                {gen_fsm, start_link, 4},
+                {gen_fsm, sync_send_all_state_event, 2}]}).
+
 
 -export([start_link/0, start_link/1, set_data/2, set_vput_replies/1, 
          get_history/0, get_put_history/0,
@@ -87,7 +93,7 @@ get_reply_history() ->
 
 log_postcommit(Obj) ->
     gen_fsm:sync_send_all_state_event(?MODULE, {log_postcommit, Obj}).
-    
+
 get_postcommits() ->
     gen_fsm:sync_send_all_state_event(?MODULE, get_postcommits).
 

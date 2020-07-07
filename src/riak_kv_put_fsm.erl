@@ -27,9 +27,13 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 -include_lib("riak_kv_vnode.hrl").
--include_lib("riak_kv_js_pools.hrl").
 -include("riak_kv_wm_raw.hrl").
 -include("riak_kv_types.hrl").
+-include("stacktrace.hrl").
+
+-compile({nowarn_deprecated_function, 
+            [{gen_fsm, start_link, 3},
+                {gen_fsm, send_event, 2}]}).
 
 -behaviour(gen_fsm).
 -define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
@@ -101,25 +105,26 @@
 -record(state, {from :: {raw, integer(), pid()},
                 robj :: riak_object:riak_object(),
                 options=[] :: options(),
-                n :: pos_integer(),
-                w :: non_neg_integer(),
-                dw :: non_neg_integer(),
-                pw :: non_neg_integer(),
-                node_confirms :: non_neg_integer(),
-                coord_pl_entry :: {integer(), atom()},
-                preflist2 :: riak_core_apl:preflist_ann(),
+                n :: pos_integer() | undefined,
+                w :: non_neg_integer() | undefined,
+                dw :: non_neg_integer() | undefined,
+                pw :: non_neg_integer() | undefined,
+                node_confirms :: non_neg_integer() | undefined,
+                coord_pl_entry :: {integer(), atom()} | undefined,
+                preflist2 :: riak_core_apl:preflist_ann() | undefined,
                 bkey :: {riak_object:bucket(), riak_object:key()},
-                req_id :: pos_integer(),
-                starttime :: pos_integer(), % start time to send to vnodes
-                timeout :: pos_integer()|infinity,
-                tref    :: reference(),
+                req_id :: pos_integer()  | undefined,
+                starttime = riak_core_util:moment()
+                        :: pos_integer(), % start time to send to vnodes
+                timeout = infinity :: pos_integer()|infinity,
+                tref :: reference() | undefined,
                 vnode_options=[] :: list(),
-                returnbody :: boolean(),
-                allowmult :: boolean(),
+                returnbody = false :: boolean(),
+                allowmult = true :: boolean(),
                 precommit=[] :: list(),
                 postcommit=[] :: list(),
-                bucket_props:: list(),
-                putcore :: riak_kv_put_core:putcore(),
+                bucket_props :: list() | undefined,
+                putcore :: riak_kv_put_core:putcore() | undefined,
                 put_usecs :: undefined | non_neg_integer(),
                 timing = [] :: [{atom(), {non_neg_integer(), non_neg_integer(),
                                           non_neg_integer()}}],
@@ -182,20 +187,24 @@ get_put_coordinator_failure_timeout() ->
     app_helper:get_env(riak_kv, put_coordinator_failure_timeout, 3000).
 
 make_ack_options(Options) ->
-    case (riak_core_capability:get(
-            {riak_kv, put_fsm_ack_execute}, disabled) == disabled
-          orelse not
-          app_helper:get_env(
-            riak_kv, retry_put_coordinator_failure, true)) of
-        true ->
+    AckOption = get_option(ack_execute, Options),
+    AckCap = riak_core_capability:get({riak_kv, put_fsm_ack_execute}, disabled),
+    RetryCoord =
+        app_helper:get_env(riak_kv, retry_put_coordinator_failure, true) andalso
+        get_option(retry_put_coordinator_failure, Options, true),
+    case {AckOption, AckCap, RetryCoord} of
+        {Pid, _, _} when is_pid(Pid) ->
+            %% Some process (probably on another node) is already waiting
+            %% for an ack, no need to monitor here.
             {false, Options};
-        false ->
-            case get_option(retry_put_coordinator_failure, Options, true) of
-                true ->
-                    {true, [{ack_execute, self()}|Options]};
-                _Else ->
-                    {false, Options}
-            end
+        {undefined, disabled, _} ->
+            {false, Options};
+        {undefined, _, false} ->
+            {false, Options};
+        {undefined, enabled, true} ->
+            {true, [
+                %% ack forwarder
+                {ack_execute, self()}| Options]}
     end.
 
 spawn_coordinator_proc(CoordNode, Mod, Fun, Args) ->
@@ -211,7 +220,14 @@ monitor_remote_coordinator(false = _UseAckP, _MiddleMan, _CoordNode, StateData) 
     {stop, normal, StateData};
 monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, StateData) ->
     receive
-        {ack, CoordNode, now_executing} ->
+        {ack, CoordNodeFinal, now_executing} ->
+            case CoordNodeFinal of
+                CoordNode ->
+                    ok;
+                _ ->
+                    lager:warning("unexpected forward-ack from ~p, expected from ~p",
+                                  [CoordNodeFinal, CoordNode])
+            end,
             {stop, normal, StateData}
     after StateData#state.coordinator_timeout ->
             exit(MiddleMan, kill),
@@ -756,19 +772,17 @@ handle_options([{_,_}|T], Acc) -> handle_options(T, Acc).
 %% Invokes the hook and returns a tuple of
 %% {Lang, Called, Result}
 %% Where Called = {Mod, Fun} if Lang = erlang
-%%       Called = JSName if Lang = javascript
 invoke_hook({struct, Hook}=HookDef, RObj) ->
     Mod = get_option(<<"mod">>, Hook),
     Fun = get_option(<<"fun">>, Hook),
-    JSName = get_option(<<"name">>, Hook),
-    if (Mod == undefined orelse Fun == undefined) andalso JSName == undefined ->
+    if (Mod == undefined orelse Fun == undefined) ->
             {error, {invalid_hook_def, HookDef}};
-       true -> invoke_hook(Mod, Fun, JSName, RObj)
+       true -> invoke_hook(Mod, Fun, RObj)
     end;
 invoke_hook(HookDef, _RObj) ->
     {error, {invalid_hook_def, HookDef}}.
 
-invoke_hook(Mod0, Fun0, undefined, RObj) when Mod0 /= undefined, Fun0 /= undefined ->
+invoke_hook(Mod0, Fun0, RObj) when Mod0 /= undefined, Fun0 /= undefined ->
     Mod = binary_to_atom(Mod0, utf8),
     Fun = binary_to_atom(Fun0, utf8),
     try
@@ -777,9 +791,7 @@ invoke_hook(Mod0, Fun0, undefined, RObj) when Mod0 /= undefined, Fun0 /= undefin
         Class:Exception ->
             {erlang, {Mod, Fun}, {'EXIT', Mod, Fun, Class, Exception}}
     end;
-invoke_hook(undefined, undefined, JSName, RObj) when JSName /= undefined ->
-    {js, JSName, riak_kv_js_manager:blocking_dispatch(?JSPOOL_HOOK, {{jsfun, JSName}, RObj}, 5)};
-invoke_hook(_, _, _, _) ->
+invoke_hook(_, _, _) ->
     {error, {invalid_hook_def, no_hook}}.
 
 -spec decode_precommit(any(), boolean()) -> fail | {fail, any()} | 
@@ -807,7 +819,7 @@ decode_precommit({erlang, {Mod, Fun}, Result}, Trace) ->
                     [dtrace_errstr({Mod, Fun, Class, Exception})]),
             ok = riak_kv_stat:update(precommit_fail),
             lager:debug("Problem invoking pre-commit hook ~p:~p -> ~p:~p~n~p",
-                        [Mod,Fun,Class,Exception, erlang:get_stacktrace()]),
+                        [Mod,Fun,Class,Exception, ?_current_stacktrace_()]),
             {fail, {hook_crashed, {Mod, Fun, Class, Exception}}};
         Obj ->
             try
@@ -822,36 +834,6 @@ decode_precommit({erlang, {Mod, Fun}, Result}, Trace) ->
                     {fail, {invalid_return, {Mod, Fun, Result}}}
 
             end
-    end;
-decode_precommit({js, JSName, Result}, Trace) ->
-    case Result of
-        {ok, <<"fail">>} ->
-            ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-5], []),
-            ok = riak_kv_stat:update(precommit_fail),
-            lager:debug("Pre-commit hook ~p failed, no reason given",
-                        [JSName]),
-            fail;
-        {ok, [{<<"fail">>, Message}]} ->
-            ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-6],
-                    [dtrace_errstr(Message)]),
-            ok = riak_kv_stat:update(precommit_fail),
-            lager:debug("Pre-commit hook ~p failed with reason ~p",
-                        [JSName, Message]),
-            {fail, Message};
-        {ok, Json} ->
-            case catch riak_object:from_json(Json) of
-                {'EXIT', _} ->
-                    ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-7], []),
-                    {fail, {invalid_return, {JSName, Json}}};
-                Obj ->
-                    Obj
-            end;
-        {error, Error} ->
-            ok = riak_kv_stat:update(precommit_fail),
-            ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-7], 
-                    [dtrace_errstr(Error)]),
-            lager:debug("Problem invoking pre-commit hook: ~p", [Error]),
-            fail
     end;
 decode_precommit({error, Reason}, Trace) ->
     ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-8], 
@@ -877,7 +859,7 @@ decode_postcommit({erlang, {M,F}, Res}, Trace) ->
             ?DTRACE(Trace, ?C_PUT_FSM_DECODE_POSTCOMMIT, [-3],
                     [dtrace_errstr({M, F, Class, Ex})]),
             ok = riak_kv_stat:update(postcommit_fail),
-            Stack = erlang:get_stacktrace(),
+            Stack = ?_current_stacktrace_(),
             lager:debug("Problem invoking post-commit hook ~p:~p -> ~p:~p~n~p",
                         [M, F, Class, Ex, Stack]),
             ok;
@@ -1049,11 +1031,9 @@ coordinate_or_forward(Preflist, State) ->
                               undefined  -> undefined;
                               {_Idx, Nd} -> atom2list(Nd)
                           end,
-            StartTime = riak_core_util:moment(),
             StateData = State#state{n = N,
                                     coord_pl_entry = CoordPLEntry,
-                                    preflist2 = Preflist,
-                                    starttime = StartTime},
+                                    preflist2 = Preflist},
             ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [0],
                     ["prepare", CoordPlNode]),
             new_state_timeout(validate, StateData);
@@ -1108,7 +1088,7 @@ select_coordinator(Preflist, _CoordinatorType=local, false=_MBoxCheck) ->
             ok = riak_kv_stat:update(coord_redir),
             {forward, RemoteNode};
         {[], Remotes} ->
-            {ListPos, _} = random:uniform_s(length(Remotes), os:timestamp()),
+            ListPos = rand:uniform(length(Remotes)),
             {_Idx, CoordNode} = lists:nth(ListPos, Remotes),
             ok = riak_kv_stat:update(coord_redir),
             {forward, CoordNode};
@@ -1141,12 +1121,7 @@ select_least_loaded_coordinator(LocalMBoxData, _RemoteMBoxData) ->
 mbox_data_sort({_, error, error}, {_, error, error}) ->
     %% We use random here, so that a list full of errors picks a
     %% random node to forward to (as per pre-gh1661 code)?
-    case random:uniform_s(2, os:timestamp()) of
-        {1, _} ->
-            true;
-        {2, _} ->
-            false
-    end;
+    rand:uniform(2) == 1;
 mbox_data_sort({_, error, error}, {_, _Load, _Limit}) ->
     false;
 mbox_data_sort({_, _LoadA, _LimitA}, {_, error, error}) ->
@@ -1268,8 +1243,12 @@ get_soft_limit_option(Options) ->
     SoftLimitSupported = riak_core_capability:get({riak_kv, put_soft_limit}, false),
     %% both the system (post forward) and the client (via options) can
     %% turn off soft-limit checking. However, by default, we should
-    %% use them (if supported)
-    SoftLimitedWanted = get_option(mbox_check, Options, SoftLimitSupported),
+    %% use them (if supported) - unless it is explicitly disabled by toggling the
+    %% mbox_check_enabled environment flag
+    SoftLimitedWanted =
+        app_helper:get_env(riak_kv, mbox_check_enabled, true) andalso
+        SoftLimitSupported andalso
+        get_option(mbox_check, Options, SoftLimitSupported),
     SoftLimitedWanted.
 
 
@@ -1292,9 +1271,7 @@ forward(CoordNode, State) ->
                                 [
                                  %% don't check mbox at new fsm, we
                                  %% picked the "best"
-                                 {mbox_check, false},
-                                 %% ack forwarder
-                                 {ack_execute, self()}
+                                 {mbox_check, false}
                                  | Options]),
         MiddleMan = spawn_coordinator_proc(
                       CoordNode, riak_kv_put_fsm, start_link,
@@ -1304,11 +1281,11 @@ forward(CoordNode, State) ->
         monitor_remote_coordinator(UseAckP, MiddleMan,
                                    CoordNode, State)
     catch
-        _:Reason ->
+        ?_exception_(_, Reason, StackToken) ->
             ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [-2],
                     ["prepare", dtrace_errstr(Reason)]),
             lager:error("Unable to forward put for ~p to ~p - ~p @ ~p\n",
-                        [BKey, CoordNode, Reason, erlang:get_stacktrace()]),
+                        [BKey, CoordNode, Reason, ?_get_stacktrace_(StackToken)]),
             process_reply({error, {coord_handoff_failed, Reason}}, State)
     end.
 

@@ -46,24 +46,36 @@
     % default_nval that is greater than the lowest n_val used may have
     % unpredictable results (if the plan n_val is also less than the default
     % n_val)
--type timeout() :: pos_integer().
+-type timeout_ms() :: pos_integer().
     % timeout measured in ms
 -type result() :: complete|not_supported|bad_request.
 -type result_score() :: {result(), non_neg_integer()}.
 
--type inbound_api() :: list(backup_path()|coverage()|timeout()).
+-type inbound_api() :: list(backup_path()|coverage()|timeout_ms()).
 
 
 -record(state, {from :: from(),
                 acc = [] :: list(result_score()),
                 start_time = os:timestamp() :: erlang:timestamp()}).
 
+-type backup_state() :: #state{}.
+
+-type init_response() ::
+        {riak_kv_requests:hotbackup_request(),
+            all,
+            pos_integer(),
+            pos_integer(),
+            riak_kv,
+            riak_kv_vnode_master,
+            pos_integer(),
+            backup_state()}.
+
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--spec init(from(), inbound_api()) -> tuple().
+-spec init(from(), inbound_api()) -> init_response().
 %% @doc 
 %% Return a tuple containing the ModFun to call per vnode, the number of 
 %% primary preflist vnodes the operation should cover, the service to use to 

@@ -184,8 +184,8 @@ malformed_request(RD, Ctx) ->
 %%      string-encoded integer.  Store the integer value
 %%      in context() if so.
 malformed_timeout_param(RD, Ctx) ->
-    case wrq:get_qs_value("timeout", none, RD) of
-        none ->
+    case wrq:get_qs_value("timeout", RD) of
+        undefined ->
             {false, RD, Ctx};
         TimeoutStr ->
             try
@@ -222,13 +222,19 @@ produce_bucket_list(RD, #ctx{client=Client,
     case wrq:get_qs_value(?Q_BUCKETS, RD) of
         ?Q_TRUE ->
             %% Get the buckets.
-            {ok, Buckets} = Client:list_buckets(none, Timeout, BType),
+            {ok, Buckets} =
+                riak_client:list_buckets(none, Timeout, BType, Client),
             {mochijson2:encode({struct, [{?JSON_BUCKETS, Buckets}]}),
              RD, Ctx};
         ?Q_STREAM ->
-            F = fun() ->
-                        {ok, ReqId} = Client:stream_list_buckets(none, Timeout, BType),
-                        stream_buckets(ReqId)
+            F =
+                fun() ->
+                    {ok, ReqId} =
+                        riak_client:stream_list_buckets(none,
+                                                        Timeout,
+                                                        BType,
+                                                        Client),
+                    stream_buckets(ReqId)
                 end,
             {{stream, {[], F}}, RD, Ctx};
         _ ->

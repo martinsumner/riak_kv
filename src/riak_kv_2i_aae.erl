@@ -22,6 +22,15 @@
 -module(riak_kv_2i_aae).
 -behaviour(gen_fsm).
 
+-compile({nowarn_deprecated_function, 
+            [{gen_fsm, start, 4},
+                {gen_fsm, sync_send_all_state_event, 3},
+                {gen_fsm, send_event_after, 2},
+                {gen_fsm, reply, 2},
+                {gen_fsm, send_event, 2},
+                {gen_fsm, sync_send_event, 3},
+                {gen_fsm, cancel_timer, 1}]}).
+
 -include("riak_kv_wm_raw.hrl").
 
 -export([start/2, stop/1, get_status/0, to_report/1]).
@@ -49,8 +58,9 @@
 -define(INDEX_SCAN_TIMEOUT, 300000). % 5 mins, in case fold dies timeout
 -define(INDEX_REFRESH_TIMEOUT, 60000).
 
--type worker_status() :: starting | scanning_indexes | populating_hashtree |
-                         exchanging.
+-type worker_status() :: 
+        not_started |
+        starting | scanning_indexes | populating_hashtree | exchanging.
 
 -type partition_result() :: {Partition :: integer(),
                              {ok,  term()} | {error, term()}}.
@@ -77,7 +87,7 @@
          aae_pid_req_id :: reference() | undefined,
          aae_pid_timer :: reference() | undefined,
          worker_monitor :: reference() | undefined,
-         worker_status :: worker_status(),
+         worker_status = not_started :: worker_status(),
          index_scan_count = 0 :: integer(),
          hashtree_population_count = 0 :: integer(),
          exchange_count = 0 :: integer(),
@@ -363,7 +373,7 @@ create_index_data_db(Partition, DutyCycle, DBDir, DBRef) ->
     lager:info("Grabbing all index data for partition ~p", [Partition]),
     Ref = make_ref(),
     Sender = {raw, Ref, Client},
-    StartTime = now(),
+    StartTime = os:timestamp(),
     riak_core_vnode_master:command({Partition, node()},
                                    {fold_indexes, Fun, 0},
                                    Sender,
@@ -395,7 +405,7 @@ leveldb_opts() ->
 duty_cycle_pause(WaitFactor, StartTime) ->
     case WaitFactor > 0 of
         true ->
-            Now = now(),
+            Now = os:timestamp(),
             ElapsedMicros = timer:now_diff(Now, StartTime),
             WaitMicros = ElapsedMicros * WaitFactor,
             WaitMillis = trunc(WaitMicros / 1000 + 0.5),
@@ -416,7 +426,7 @@ wait_for_index_scan(Ref, BatchRef, StartTime, WaitFactor) ->
             duty_cycle_pause(WaitFactor, StartTime),
             Pid ! {BatchRef, continue},
             send_event({index_scan_update, Count}),
-            wait_for_index_scan(Ref, BatchRef, now(), WaitFactor);
+            wait_for_index_scan(Ref, BatchRef, os:timestamp(), WaitFactor);
         {Ref, Result} ->
             Result
     after
@@ -468,7 +478,7 @@ build_tmp_tree(Index, DBRef, DutyCycle) ->
                         0 ->
                             send_event({hashtree_population_update, Count2}),
                             duty_cycle_pause(WaitFactor, StartTime),
-                            now();
+                            os:timestamp();
                         _ ->
                             StartTime
                     end,
@@ -476,7 +486,7 @@ build_tmp_tree(Index, DBRef, DutyCycle) ->
             end,
             send_event({hashtree_population_update, 0}),
             {Count, Tree2, _} = eleveldb:fold(DBRef, FoldFun,
-                                              {0, Tree, erlang:now()}, []),
+                                              {0, Tree, os:timestamp()}, []),
             lager:info("Done building temporary tree for 2i data "
                        "with ~p entries",
                        [Count]),

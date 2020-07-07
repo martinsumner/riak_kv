@@ -96,6 +96,13 @@
 
 -behaviour(gen_fsm).
 
+-compile({nowarn_deprecated_function, 
+            [{gen_fsm, start_link, 3},
+                {gen_fsm, send_event, 2},
+                {gen_fsm, sync_send_event, 2},
+                {gen_fsm, sync_send_event, 3},
+                {gen_fsm, reply, 2}]}).
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -107,8 +114,8 @@
 
 -record(state, {
           owner :: pid(),
-          builder :: pid(),
-          ref :: reference(),
+          builder :: pid() | undefined,
+          ref :: reference() | undefined,
           results=[] :: [{PhaseId::term(), Results::list()}],
           delayed_acks=[] :: list(),
           logs=[] :: list(),

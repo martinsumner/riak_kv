@@ -51,7 +51,7 @@
 -include_lib("riak_pb/include/riak_pb_kv_codec.hrl").
 
 -ifdef(TEST).
--compile([export_all]).
+-compile([export_all, nowarn_export_all]).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
@@ -68,14 +68,17 @@
 -record(state, {client,    % local client
                 req,       % current request (for multi-message requests like list keys)
                 req_ctx,   % context to go along with request (partial results, request ids etc)
-                client_id = <<0,0,0,0>> }). % emulate legacy API when vnode_vclocks is true
+                is_consistent = false :: boolean(),
+                client_id = <<0,0,0,0>>, % emulate legacy API when vnode_vclocks is true
+                repl_compress = false :: boolean()}).
 
 %% @doc init/0 callback. Returns the service internal start
 %% state.
 -spec init() -> any().
 init() ->
     {ok, C} = riak:local_client(),
-    #state{client=C}.
+    ToCompress = app_helper:get_env(riak_kv, replrtq_compressonwire, false),
+    #state{client=C, repl_compress = ToCompress}.
 
 %% @doc decode/2 callback. Decodes an incoming message.
 decode(Code, Bin) ->
@@ -100,10 +103,13 @@ encode(Message) ->
 
 %% @doc process/2 callback. Handles an incoming request message.
 process(rpbgetclientidreq, #state{client=C, client_id=CID} = State) ->
-    ClientId = case riak_core_capability:get({riak_kv, vnode_vclocks}) of
-                   true -> CID;
-                   false -> C:get_client_id()
-               end,
+    ClientId =
+        case riak_core_capability:get({riak_kv, vnode_vclocks}) of
+            true ->
+                CID;
+            false ->
+                riak_client:get_client_id(C)
+        end,
     Resp = #rpbgetclientidresp{client_id = ClientId},
     {reply, Resp, State};
 
@@ -122,24 +128,28 @@ process(#rpbgetreq{key = <<>>}, State) ->
     {error, "Key cannot be zero-length", State};
 process(#rpbgetreq{type = <<>>}, State) ->
     {error, "Type cannot be zero-length", State};
-process(#rpbgetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
-                   basic_quorum=BQ, if_modified=VClock,
-                   head=Head, deletedvclock=DeletedVClock,
-                   n_val=N_val, sloppy_quorum=SloppyQuorum,
-                   timeout=Timeout}, #state{client=C} = State) ->
+process(#rpbgetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0,
+                    notfound_ok=NFOk, node_confirms=NC,
+                    basic_quorum=BQ, if_modified=VClock,
+                    head=Head, deletedvclock=DeletedVClock,
+                    n_val=N_val, sloppy_quorum=SloppyQuorum,
+                    timeout=Timeout},
+            #state{client=C} = State) ->
     R = decode_quorum(R0),
     PR = decode_quorum(PR0),
     B = maybe_bucket_type(T, B0),
-    case C:get(B, K, make_option(deletedvclock, DeletedVClock) ++
-                   make_option(r, R) ++
-                   make_option(pr, PR) ++
-                   make_option(timeout, Timeout) ++
-                   make_option(notfound_ok, NFOk) ++
-                   make_option(basic_quorum, BQ) ++
-                   make_option(n_val, N_val) ++
-                   make_option(sloppy_quorum, SloppyQuorum)) of
+    Options =
+        make_option(deletedvclock, DeletedVClock) ++
+        make_option(r, R) ++
+        make_option(pr, PR) ++
+        make_option(timeout, Timeout) ++
+        make_option(notfound_ok, NFOk) ++
+        make_option(node_confirms, NC) ++
+        make_option(basic_quorum, BQ) ++
+        make_option(n_val, N_val) ++
+        make_option(sloppy_quorum, SloppyQuorum),
+    case riak_client:get(B, K, Options, C) of
         {ok, O} ->
-
             case erlify_rpbvc(VClock) == riak_object:vclock(O) of
                 true ->
                     {reply, #rpbgetresp{unchanged = true}, State};
@@ -168,6 +178,41 @@ process(#rpbgetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
             {error, {format,Reason}, State}
     end;
 
+process(#rpbfetchreq{queuename = QueueName},
+        #state{client=C, repl_compress=ToCompress} = State) ->
+    Result = 
+        try
+            riak_client:fetch(binary_to_existing_atom(QueueName, utf8), C)
+        catch _:badarg ->
+            {error, queue_not_defined}
+        end,
+    case Result of
+        {ok, queue_empty} ->
+            {reply, #rpbfetchresp{queue_empty = true}, State};
+        {ok, {deleted, Vclock, RObj}} ->
+            % Never bother compressing tombstones, they're practically empty
+            EncObj = riak_object:nextgenrepl_encode(repl_v1, RObj, false),
+            CRC32 = erlang:crc32(EncObj),
+            {reply,
+                #rpbfetchresp{queue_empty = false,
+                                deleted = true,
+                                replencoded_object = EncObj,
+                                crc_check = CRC32,
+                                deleted_vclock = pbify_rpbvc(Vclock)},
+                State};
+        {ok, RObj} ->
+            EncObj = riak_object:nextgenrepl_encode(repl_v1, RObj, ToCompress),
+            CRC32 = erlang:crc32(EncObj),
+            {reply,
+                #rpbfetchresp{queue_empty = false,
+                                deleted = false,
+                                replencoded_object = EncObj,
+                                crc_check = CRC32},
+                State};
+        {error, Reason} ->
+            {error, {format, Reason}, State}
+    end;
+
 process(#rpbputreq{bucket = <<>>}, State) ->
     {error, "Bucket cannot be zero-length", State};
 process(#rpbputreq{key = <<>>}, State) ->
@@ -181,17 +226,18 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC,
     GetOpts = make_option(n_val, N_val) ++
               make_option(sloppy_quorum, SloppyQuorum),
     B = maybe_bucket_type(T, B0),
-    Result = case riak_kv_util:consistent_object(B) of
-                 true ->
-                     consistent;
-                 false ->
-                     C:get(B, K, GetOpts)
-             end,
+    Result =
+        case riak_kv_util:consistent_object(B) of
+            true ->
+                consistent;
+            false ->
+                riak_client:get(B, K, GetOpts, C)
+        end,
     case Result of
         consistent ->
             process(Req#rpbputreq{if_not_modified=undefined,
-                                  if_none_match=consistent},
-                    State);
+                                  if_none_match=undefined},
+                    State#state{is_consistent = true});
         {ok, _} when NoneMatch ->
             {error, "match_found", State};
         {ok, O} when NotMod ->
@@ -217,9 +263,8 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC, content=RpbContent,
                    w=W0, dw=DW0, pw=PW0, return_body=ReturnBody,
                    return_head=ReturnHead, timeout=Timeout, asis=AsIs,
                    n_val=N_val, sloppy_quorum=SloppyQuorum,
-                   node_confirms=NodeConfirms0,
-                   if_none_match=NoneMatch},
-        #state{client=C} = State) ->
+                   node_confirms=NodeConfirms0},
+        #state{client=C} = State0) ->
 
     case K of
         undefined ->
@@ -250,17 +295,21 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC, content=RpbContent,
                           _ -> []
                       end
               end,
-    Options2 = case NoneMatch of
-                   consistent ->
-                       [{if_none_match, true}|Options];
-                   _ ->
-                       Options
-               end,
-    case C:put(O, make_options([{w, W}, {dw, DW}, {pw, PW},
-                                {node_confirms, NodeConfirms},
-                                {timeout, Timeout}, {asis, AsIs},
-                                {n_val, N_val},
-                                {sloppy_quorum, SloppyQuorum}]) ++ Options2) of
+    {Options2, State} = 
+        case State0#state.is_consistent of
+            true ->
+                {[{if_none_match, true}|Options],
+                    State0#state{is_consistent = false}};
+            _ ->
+                {Options, State0}
+        end,
+    Opts =
+        make_options([{w, W}, {dw, DW}, {pw, PW},
+                        {node_confirms, NodeConfirms},
+                        {timeout, Timeout}, {asis, AsIs},
+                        {n_val, N_val},
+                        {sloppy_quorum, SloppyQuorum}]) ++ Options2,
+    case riak_client:put(O, Opts, C) of
         ok when is_binary(ReturnKey) ->
             PutResp = #rpbputresp{key = ReturnKey},
             {reply, PutResp, State};
@@ -304,13 +353,14 @@ process(#rpbdelreq{bucket=B0, type=T, key=K, vclock=PbVc,
     Options = make_options([{r, R}, {w, W}, {rw, RW}, {pr, PR}, {pw, PW}, 
                             {dw, DW}, {timeout, Timeout}, {n_val, N_val},
                             {sloppy_quorum, SloppyQuorum}]),
-    Result = case PbVc of
-                 undefined ->
-                     C:delete(B, K, Options);
-                 _ ->
-                     VClock = erlify_rpbvc(PbVc),
-                     C:delete_vclock(B, K, VClock, Options)
-             end,
+    Result =
+        case PbVc of
+            undefined ->
+                riak_client:delete(B, K, Options, C);
+            _ ->
+                VClock = erlify_rpbvc(PbVc),
+                riak_client:delete_vclock(B, K, VClock, Options, C)
+        end,
     case Result of
         ok ->
             {reply, rpbdelresp, State};
@@ -385,7 +435,7 @@ bucket_type(T, B) ->
 -ifdef(TEST).
 
 -define(CODE(Msg), riak_pb_codec:msg_code(Msg)).
--define(PAYLOAD(Msg), riak_kv_pb:encode(Msg)).
+-define(PAYLOAD(Msg), riak_kv_pb:encode_msg(Msg)).
 
 empty_bucket_key_test_() ->
     Name = "empty_bucket_key_test",

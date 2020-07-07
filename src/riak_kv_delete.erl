@@ -60,7 +60,8 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
         {R, PR, PassThruOpts} ->
             RealStartTime = riak_core_util:moment(),
             {ok, C} = riak:local_client(),
-            case C:get(Bucket,Key,[{r,R},{pr,PR},{timeout,Timeout}]++PassThruOpts) of
+            GetOpts = [{r,R}, {pr,PR}, {timeout,Timeout}] ++ PassThruOpts,
+            case riak_client:get(Bucket, Key, GetOpts, C) of
                 {ok, OrigObj} ->
                     RemainingTime = Timeout - (riak_core_util:moment() - RealStartTime),
                     delete(ReqId,Bucket,Key,Options,RemainingTime,Client,ClientId,riak_object:vclock(OrigObj));
@@ -78,21 +79,22 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
     case get_w_options(Bucket, Options) of
         {error, Reason} ->
             ?DTRACE(?C_DELETE_INIT2, [-1], []),
-            Client ! {ReqId, {error, Reason}};
+            send_reply(Client, ReqId, {error, Reason});
         {W, PW, DW, PassThruOptions} ->
             Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(?MD_DELETED,
                                                                  "true", dict:new())),
             Tombstone = riak_object:set_vclock(Obj0, VClock),
-            {ok,C} = riak:local_client(ClientId),
-            Reply = C:put(Tombstone, [{w,W},{pw,PW},{dw, DW},{timeout,Timeout}]++PassThruOptions),
-            Client ! {ReqId, Reply},
+            {ok, C} = riak:local_client(ClientId),
+            PutOpts = [{w,W}, {pw,PW}, {dw, DW}, {timeout,Timeout}] ++ PassThruOptions,
+            Reply = riak_client:put(Tombstone, PutOpts, C),
+            send_reply(Client, ReqId, Reply),
             HasCustomN_val = proplists:get_value(n_val, Options) /= undefined,
             case Reply of
                 ok when HasCustomN_val == false ->
                     ?DTRACE(?C_DELETE_INIT2, [1], [<<"reap">>]),
                     {ok, C2} = riak:local_client(),
                     AsyncTimeout = 60*1000,     % Avoid client-specified value
-                    Res = C2:get(Bucket, Key, all, AsyncTimeout),
+                    Res = riak_client:get(Bucket, Key, all, AsyncTimeout, C2),
                     ?DTRACE(?C_DELETE_REAPER_GET_DONE, [1], [<<"reap">>]),
                     Res;
                 _ ->
@@ -100,6 +102,11 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
                     nop
             end
     end.
+
+send_reply(undefined, _ReqId, _Reply) ->
+    ok;
+send_reply(Client, ReqId, Reply) ->
+    Client ! {ReqId, Reply}.
 
 get_r_options(Bucket, Options) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
@@ -216,7 +223,7 @@ delete_test_() ->
 invalid_rw_delete() ->
     RW = <<"abc">>,
     %% Start the gen_fsm process
-    RequestId = erlang:phash2(erlang:now()),
+    RequestId = erlang:phash2(os:timestamp()),
     Bucket = <<"testbucket">>,
     Key = <<"testkey">>,
     Timeout = 60000,
@@ -233,7 +240,7 @@ invalid_rw_delete() ->
 invalid_r_delete() ->
     R = <<"abc">>,
     %% Start the gen_fsm process
-    RequestId = erlang:phash2(erlang:now()),
+    RequestId = erlang:phash2(os:timestamp()),
     Bucket = <<"testbucket">>,
     Key = <<"testkey">>,
     Timeout = 60000,
@@ -250,7 +257,7 @@ invalid_r_delete() ->
 invalid_w_delete() ->
     W = <<"abc">>,
     %% Start the gen_fsm process
-    RequestId = erlang:phash2(erlang:now()),
+    RequestId = erlang:phash2(os:timestamp()),
     Bucket = <<"testbucket">>,
     Key = <<"testkey">>,
     Timeout = 60000,
@@ -268,7 +275,7 @@ invalid_w_delete() ->
 invalid_pr_delete() ->
     PR = <<"abc">>,
     %% Start the gen_fsm process
-    RequestId = erlang:phash2(erlang:now()),
+    RequestId = erlang:phash2(os:timestamp()),
     Bucket = <<"testbucket">>,
     Key = <<"testkey">>,
     Timeout = 60000,
@@ -285,7 +292,7 @@ invalid_pr_delete() ->
 invalid_pw_delete() ->
     PW = <<"abc">>,
     %% Start the gen_fsm process
-    RequestId = erlang:phash2(erlang:now()),
+    RequestId = erlang:phash2(os:timestamp()),
     Bucket = <<"testbucket">>,
     Key = <<"testkey">>,
     Timeout = 60000,

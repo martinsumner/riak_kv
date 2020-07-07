@@ -24,7 +24,6 @@
 
 -module(riak_kv_sup).
 
--include_lib("riak_kv_js_pools.hrl").
 
 -behaviour(supervisor).
 
@@ -41,32 +40,15 @@ start_link() ->
 %% @spec init([]) -> SupervisorTree
 %% @doc supervisor callback.
 init([]) ->
-    catch dtrace:init(),                   % NIF load trigger (R14B04)
-    catch dyntrace:p(),                    % NIF load trigger (R15B01+)
     riak_kv_entropy_info:create_table(),
     riak_kv_hooks:create_table(),
     VMaster = {riak_kv_vnode_master,
                {riak_core_vnode_master, start_link,
                 [riak_kv_vnode, riak_kv_legacy_vnode, riak_kv]},
                permanent, 5000, worker, [riak_core_vnode_master]},
-    MapJSPool = {?JSPOOL_MAP,
-                 {riak_kv_js_manager, start_link,
-                  [?JSPOOL_MAP, read_js_pool_size(map_js_vm_count, "map")]},
-                 permanent, 30000, worker, [riak_kv_js_manager]},
-    ReduceJSPool = {?JSPOOL_REDUCE,
-                    {riak_kv_js_manager, start_link,
-                     [?JSPOOL_REDUCE, read_js_pool_size(reduce_js_vm_count, "reduce")]},
-                    permanent, 30000, worker, [riak_kv_js_manager]},
-    HookJSPool = {?JSPOOL_HOOK,
-                  {riak_kv_js_manager, start_link,
-                  [?JSPOOL_HOOK, read_js_pool_size(hook_js_vm_count, "hook callback")]},
-                  permanent, 30000, worker, [riak_kv_js_manager]},
     HTTPCache = {riak_kv_http_cache,
 		 {riak_kv_http_cache, start_link, []},
 		 permanent, 5000, worker, [riak_kv_http_cache]},
-    JSSup = {riak_kv_js_sup,
-             {riak_kv_js_sup, start_link, []},
-             permanent, infinity, supervisor, [riak_kv_js_sup]},
     FastPutSup = {riak_kv_w1c_sup,
                  {riak_kv_w1c_sup, start_link, []},
                  permanent, infinity, supervisor, [riak_kv_w1c_sup]},
@@ -94,6 +76,21 @@ init([]) ->
     EntropyManager = {riak_kv_entropy_manager,
                       {riak_kv_entropy_manager, start_link, []},
                       permanent, 30000, worker, [riak_kv_entropy_manager]},
+    TictacFSManager = {riak_kv_ttaaefs_manager,
+                      {riak_kv_ttaaefs_manager, start_link, []},
+                      permanent, 30000, worker, [riak_kv_ttaaefs_manager]},
+    ReplRTQSrc = {riak_kv_replrtq_src,
+                      {riak_kv_replrtq_src, start_link, []},
+                      permanent, 30000, worker, [riak_kv_replrtq_src]},
+    ReplRTQSnk = {riak_kv_replrtq_snk,
+                      {riak_kv_replrtq_snk, start_link, []},
+                      permanent, 30000, worker, [riak_kv_replrtq_snk]},
+    Reaper = {riak_kv_reaper,
+                {riak_kv_reaper, start_link, []},
+                permanent, 30000, worker, [riak_kv_reaper]},
+    Eraser = {riak_kv_eraser,
+                {riak_kv_eraser, start_link, []},
+                permanent, 30000, worker, [riak_kv_eraser]},
 
     EnsemblesKV =  {riak_kv_ensembles,
                     {riak_kv_ensembles, start_link, []},
@@ -105,6 +102,11 @@ init([]) ->
     % Build the process list...
     Processes = lists:flatten([
         EntropyManager,
+        TictacFSManager,
+        ReplRTQSrc,
+        ReplRTQSnk,
+        Reaper,
+        Eraser,
         ?IF(HasStorageBackend, VMaster, []),
         FastPutSup,
         DeleteSup,
@@ -115,29 +117,8 @@ init([]) ->
         ClusterAAEFsmSup,
         HotBackupAAEFsmSup,
         [EnsemblesKV || riak_core_sup:ensembles_enabled()],
-        JSSup,
-        MapJSPool,
-        ReduceJSPool,
-        HookJSPool,
         HTTPCache
     ]),
 
     % Run the proesses...
     {ok, {{one_for_one, 10, 10}, Processes}}.
-
-%% Internal functions
-read_js_pool_size(Entry, PoolType) ->
-    case app_helper:get_env(riak_kv, Entry, undefined) of
-        undefined ->
-            OldSize = app_helper:get_env(riak_kv, js_vm_count, 0),
-            lager:warning("js_vm_count has been deprecated. "
-                            "Please use ~p to configure the ~s pool.", [Entry, PoolType]),
-            case OldSize > 8 of
-                true ->
-                    OldSize div 3;
-                false ->
-                    OldSize
-            end;
-        Size ->
-            Size
-    end.

@@ -42,6 +42,11 @@
 
 -export([data_size/1]).
 
+-ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
+-export([prop_bitcask_backend/0]).
+-endif.
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -57,6 +62,7 @@
 -define(VERSION_FILE, "version.txt").
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold,size]).
+-define(TERMINAL_POSIX_ERRORS, [eacces, erofs, enodev, enospc]).
 
 %% must not be 131, otherwise will match t2b in error
 %% yes, I know that this is horrible.
@@ -64,7 +70,7 @@
 -define(VERSION_BYTE, ?VERSION_1).
 -define(CURRENT_KEY_TRANS, fun key_transform_to_1/1).
 
--record(state, {ref :: reference(),
+-record(state, {ref :: reference() | undefined,
                 data_dir :: string(),
                 opts :: [{atom(), term()}],
                 partition :: integer(),
@@ -136,7 +142,6 @@ make_bk(1, Bucket, Key) ->
 %% @doc Start the bitcask backend
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config0) ->
-    random:seed(erlang:now()),
     {Config, KeyVsn} =
         case app_helper:get_prop_or_env(small_keys, Config0, bitcask) of
             false ->
@@ -233,6 +238,11 @@ put(Bucket, PrimaryKey, _IndexSpecs, Val,
         ok ->
             {ok, State};
         {error, Reason} ->
+            lager:warning("Backend put error ~p", [Reason]),
+            % Should crash if the error is a permanent file system error
+            false =
+                is_tuple(Reason) and
+                    lists:member(element(2, Reason), ?TERMINAL_POSIX_ERRORS),
             {error, Reason, State}
     end.
 
@@ -579,7 +589,7 @@ schedule_merge(Ref) when is_reference(Ref) ->
     JitterPerc = app_helper:get_env(riak_kv, bitcask_merge_check_jitter,
                                     ?MERGE_CHECK_JITTER),
     Jitter = Interval * JitterPerc,
-    FinalInterval = Interval + trunc(2 * random:uniform() * Jitter - Jitter),
+    FinalInterval = Interval + trunc(2 * rand:uniform() * Jitter - Jitter),
     lager:debug("Scheduling Bitcask merge check in ~pms", [FinalInterval]),
     riak_kv_backend:callback_after(FinalInterval, Ref, merge_check).
 
@@ -855,20 +865,22 @@ finalize_upgrade(Dir) ->
 -ifdef(TEST).
 
 simple_test_() ->
-    ?assertCmd("rm -rf test/bitcask-backend"),
+    Path = riak_kv_test_util:get_test_dir("bitcask-backend"),
+    ?assertCmd("rm -rf " ++ Path ++ "/*"),
     application:set_env(bitcask, data_root, ""),
     backend_test_util:standard_test_gen(?MODULE,
-                                        [{data_root, "test/bitcask-backend"}]).
+                                        [{data_root, Path}]).
 
 custom_config_test_() ->
-    ?assertCmd("rm -rf test/bitcask-backend"),
+    Path = riak_kv_test_util:get_test_dir("bitcask-backend"),
+    ?assertCmd("rm -rf " ++ Path ++ "/*"),
     application:set_env(bitcask, data_root, ""),
     backend_test_util:standard_test_gen(?MODULE,
-                                        [{data_root, "test/bitcask-backend"}]).
+                                        [{data_root, Path}]).
 
 startup_data_dir_test() ->
-    os:cmd("rm -rf test/bitcask-backend/*"),
-    Path = "test/bitcask-backend",
+    Path = riak_kv_test_util:get_test_dir("bitcask-backend"),
+    ?assertCmd("rm -rf " ++ Path ++ "/*"),
     Config = [{data_root, Path}],
     %% Start the backend
     {ok, State} = start(42, Config),
@@ -876,12 +888,12 @@ startup_data_dir_test() ->
     ok = stop(State),
     %% Ensure the timestamped directories have been moved
     {ok, DataDirs} = file:list_dir(Path),
-    os:cmd("rm -rf test/bitcask-backend/*"),
+    ?assertCmd("rm -rf " ++ Path),
     ?assertEqual(["42"], DataDirs).
 
 drop_test() ->
-    os:cmd("rm -rf test/bitcask-backend/*"),
-    Path = "test/bitcask-backend",
+    Path = riak_kv_test_util:get_test_dir("bitcask-backend"),
+    ?assertCmd("rm -rf " ++ Path ++ "/*"),
     Config = [{data_root, Path}],
     %% Start the backend
     {ok, State} = start(42, Config),
@@ -892,13 +904,13 @@ drop_test() ->
     %% RemovalPartitionDirs = lists:reverse(TSPartitionDirs),
     %% Stop the backend
     ok = stop(State1),
-    os:cmd("rm -rf test/bitcask-backend/*"),
+    ?assertCmd("rm -rf " ++ Path),
     ?assertEqual([], DataDirs).
 
 get_data_dir_test() ->
     %% Cleanup
-    os:cmd("rm -rf test/bitcask-backend/*"),
-    Path = "test/bitcask-backend",
+    Path = riak_kv_test_util:get_test_dir("bitcask-backend"),
+    ?assertCmd("rm -rf " ++ Path ++ "/*"),
     %% Create a set of timestamped partition directories
     %% plus some base directories for other partitions
     TSPartitionDirs =
@@ -916,8 +928,9 @@ key_version_test() ->
                 [{Bucket, Key} | Acc]
         end,
 
-    ?assertCmd("rm -rf test/bitcask-backend"),
-    application:set_env(bitcask, data_root, "test/bitcask-backend"),
+    Path = riak_kv_test_util:get_test_dir("bitcask-backend"),
+    ?assertCmd("rm -rf " ++ Path ++ "/*"),
+    application:set_env(bitcask, data_root, Path),
     application:set_env(bitcask, small_keys, true),
     {ok, S} = ?MODULE:start(42, []),
     ?MODULE:put(<<"b1">>, <<"k1">>, [], <<"v1">>, S),
@@ -954,35 +967,24 @@ key_version_test() ->
 
 -ifdef(EQC).
 
-eqc_test_() ->
-    {spawn,
-     [{inorder,
-       [{setup,
-         fun setup/0,
-         fun cleanup/1,
-         [
-          {timeout, 180,
-           [?_assertEqual(true,
-                          backend_eqc:test(?MODULE,
-                                           false,
-                                           [{data_root,
-                                             "test/bitcask-backend"}]))]}
-         ]}]}]}.
+prop_bitcask_backend() ->
+    Path = riak_kv_test_util:get_test_dir("bitcask-backend"),
+    ?SETUP(fun() ->
+                   application:load(sasl),
+                   application:set_env(sasl,
+                                        sasl_error_logger,
+                                       {file, Path ++ "/riak_kv_bitcask_backend_eqc_sasl.log"}),
+                   error_logger:tty(false),
+                   error_logger:logfile({open,
+                                        Path ++ "/riak_kv_bitcask_backend_eqc.log"}),
 
-setup() ->
-    application:load(sasl),
-    application:set_env(sasl, sasl_error_logger,
-                        {file, "riak_kv_bitcask_backend_eqc_sasl.log"}),
-    error_logger:tty(false),
-    error_logger:logfile({open, "riak_kv_bitcask_backend_eqc.log"}),
-
-    application:load(bitcask),
-    application:set_env(bitcask, merge_window, never),
-    ok.
-
-cleanup(_) ->
-    os:cmd("rm -rf test/bitcask-backend/*").
-
+                   application:load(bitcask),
+                   application:set_env(bitcask, merge_window, never),
+                   fun() ->  ?assertCmd("rm -rf " ++ Path ++ "/*") end
+           end,
+           backend_eqc:prop_backend(?MODULE,
+                                    false,
+                                    [{data_root, Path}])).
 -endif. % EQC
 
 -endif.

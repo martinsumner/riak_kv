@@ -55,6 +55,12 @@
 
 -include("riak_kv_index.hrl").
 
+-ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
+-export([prop_eleveldb_backend/0]).
+-endif.
+
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -64,7 +70,7 @@
         iterator_refresh, snap_prefold]).
 -define(FIXED_INDEXES_KEY, fixed_indexes).
 
--record(state, {ref :: eleveldb:db_ref(),
+-record(state, {ref :: eleveldb:db_ref() | undefined,
                 data_root :: string(),
                 open_opts = [],
                 config :: config(),
@@ -102,9 +108,6 @@ capabilities(_, _) ->
 %% @doc Start the eleveldb backend
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
-    %% Initialize random seed
-    random:seed(now()),
-
     %% Get the data root directory
     DataDir = filename:join(app_helper:get_prop_or_env(data_root, Config, eleveldb),
                             integer_to_list(Partition)),
@@ -201,6 +204,9 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
         ok ->
             {ok, State};
         {error, Reason} ->
+            % Confirm this has not failed due to db_write error - as this is
+            % not recoverable and should result in a crash of the vnode
+            false = is_tuple(Reason) and (element(1, Reason) == db_write),
             {error, Reason, State}
     end.
 
@@ -606,7 +612,7 @@ init_state(DataRoot, Config) ->
     %% under heavy uniform load...
     WriteBufferMin = config_value(write_buffer_size_min, MergedConfig, 30 * 1024 * 1024),
     WriteBufferMax = config_value(write_buffer_size_max, MergedConfig, 60 * 1024 * 1024),
-    WriteBufferSize = WriteBufferMin + random:uniform(1 + WriteBufferMax - WriteBufferMin),
+    WriteBufferSize = WriteBufferMin + rand:uniform(1 + WriteBufferMax - WriteBufferMin),
 
     %% Update the write buffer size in the merged config and make sure create_if_missing is set
     %% to true
@@ -954,21 +960,24 @@ to_md_key(Key) ->
 %% ===================================================================
 -ifdef(TEST).
 
+
 simple_test_() ->
-    ?assertCmd("rm -rf test/eleveldb-backend"),
-    application:set_env(eleveldb, data_root, "test/eleveldb-backend"),
+    Path = riak_kv_test_util:get_test_dir("eleveldb-backend"),
+    ?assertCmd("rm -rf " ++ Path ++ "/*"),
+    application:set_env(eleveldb, data_root, Path),
     backend_test_util:standard_test_gen(?MODULE, []).
 
 custom_config_test_() ->
-    ?assertCmd("rm -rf test/eleveldb-backend"),
-    application:set_env(eleveldb, data_root, ""),
-    backend_test_util:standard_test_gen(?MODULE, [{data_root, "test/eleveldb-backend"}]).
+    Path = riak_kv_test_util:get_test_dir("eleveldb-backend"),
+    ?assertCmd("rm -rf " ++ Path ++ "/*"),
+    application:set_env(eleveldb, data_root, Path),
+    backend_test_util:standard_test_gen(?MODULE, [{data_root, Path}]).
 
 retry_test_() ->
     {spawn, [fun retry/0, fun retry_fail/0]}.
 
 retry() ->
-    Root = "/tmp/eleveldb_retry_test",
+    Root = riak_kv_test_util:get_test_dir("eleveldb_retry_test"),
     try
         {ok, State1} = start(42, [{data_root, Root}]),
         Me = self(),
@@ -1019,7 +1028,7 @@ retry() ->
     end.
 
 retry_fail() ->
-    Root = "/tmp/eleveldb_fail_retry_test",
+    Root = riak_kv_test_util:get_test_dir("eleveldb_fail_retry_test"),
     try
         application:set_env(riak_kv, eleveldb_open_retries, 3), % 3 times, 1ms a time
         application:set_env(riak_kv, eleveldb_open_retry_delay, 1),
@@ -1062,31 +1071,17 @@ retry_fail() ->
 
 
 -ifdef(EQC).
+prop_eleveldb_backend() ->
+    Path = riak_kv_test_util:get_test_dir("eleveldb-backend"),
+    ?SETUP(fun() ->
+                   application:load(sasl),
+                   application:set_env(sasl, sasl_error_logger, {file, Path ++ "/riak_kv_eleveldb_backend_eqc_sasl.log"}),
+                   error_logger:tty(false),
+                   error_logger:logfile({open, Path ++ "/riak_kv_eleveldb_backend_eqc.log"}),
+                   fun() -> ?_assertCmd("rm -rf " ++ Path ++ "/*") end
+           end,
+           backend_eqc:prop_backend(?MODULE, false, [{data_root, Path}])).
 
-eqc_test_() ->
-    {spawn,
-     [{inorder,
-       [{setup,
-         fun setup/0,
-         fun cleanup/1,
-         [
-          {timeout, 180,
-            [?_assertEqual(true,
-                          backend_eqc:test(?MODULE, false,
-                                           [{data_root,
-                                             "test/eleveldb-backend"}]))]}
-         ]}]}]}.
-
-setup() ->
-    application:load(sasl),
-    application:set_env(sasl, sasl_error_logger, {file, "riak_kv_eleveldb_backend_eqc_sasl.log"}),
-    error_logger:tty(false),
-    error_logger:logfile({open, "riak_kv_eleveldb_backend_eqc.log"}),
-
-    ok.
-
-cleanup(_) ->
-    ?_assertCmd("rm -rf test/eleveldb-backend").
 
 -endif. % EQC
 

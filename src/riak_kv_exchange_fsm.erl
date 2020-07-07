@@ -21,6 +21,12 @@
 -module(riak_kv_exchange_fsm).
 -behaviour(gen_fsm).
 
+-compile({nowarn_deprecated_function, 
+            [{gen_fsm, start, 3},
+                {gen_fsm, send_event, 2},
+                {gen_fsm, send_event_after, 2},
+                {gen_fsm, cancel_timer, 1}]}).
+
 %% API
 -export([start/5]).
 
@@ -33,6 +39,8 @@
 -export([init/1, handle_event/3, handle_sync_event/4, handle_info/3,
          terminate/3, code_change/4]).
 
+-include("stacktrace.hrl").
+
 -type index() :: non_neg_integer().
 -type index_n() :: {index(), pos_integer()}.
 -type vnode() :: {index(), node()}.
@@ -41,9 +49,9 @@
                 remote      :: vnode(),
                 index_n     :: index_n(),
                 local_tree  :: pid(),
-                remote_tree :: pid(),
+                remote_tree :: pid() | undefined,
                 built       :: non_neg_integer(),
-                timer       :: reference(),
+                timer       :: reference() | undefined,
                 timeout     :: pos_integer()
                }).
 
@@ -180,7 +188,7 @@ key_exchange(timeout, State=#state{local=LocalVN,
     lager:debug("Exchanging hashes for preflist ~p", [IndexN]),
 
     TmpDir = tmp_dir(),
-    {NA, NB, NC} = Now = WriteLog = now(),
+    {NA, NB, NC} = Now = WriteLog = os:timestamp(),
     LogFile1 = lists:flatten(io_lib:format("~s/in.~p.~p.~p",
                                            [TmpDir, NA, NB, NC])),
     LogFile2 = lists:flatten(io_lib:format("~s/out.~p.~p.~p",
@@ -239,10 +247,10 @@ key_exchange(timeout, State=#state{local=LocalVN,
             %% by BKey is unlikely to be any worse.  For Riak CS's use
             %% pattern, sorting may have some benefit since block N is
             %% likely to be nearby on disk of block N+1.
-            StartTime = now(),
+            StartTime = os:timestamp(),
             ok = sort_disk_log(LogFile1, LogFile2),
             lager:debug("~s:key_exchange: sorting time = ~p seconds\n",
-                        [?MODULE, timer:now_diff(now(), StartTime) / 1000000]),
+                        [?MODULE, timer:now_diff(os:timestamp(), StartTime) / 1000000]),
             {ok, ReadLog} = open_disk_log(Now, LogFile2, read_only),
             FoldRes =
                 fold_disk_log(fun(Diff, Acc) ->
@@ -293,7 +301,7 @@ read_repair_keydiff(RC, LocalVN, RemoteVN, {Bucket, Key, _Reason}) ->
             BKey = {Bucket, Key},
             repair_consistent(BKey);
         false ->
-            RC:get(Bucket, Key)
+            riak_client:get(Bucket, Key, RC)
     end,
     %% Force vnodes to update AAE tree in case read repair wasn't triggered
     riak_kv_vnode:rehash([LocalVN, RemoteVN], Bucket, Key),
@@ -362,9 +370,9 @@ open_disk_log(Name, Path, RWorRO, OtherOpts) ->
     disk_log:open([{name, Name}, {file, Path}, {mode, RWorRO}|OtherOpts]).
 
 sort_disk_log(InputFile, OutputFile) ->
-    {ok, ReadLog} = open_disk_log(now(), InputFile, read_only),
+    {ok, ReadLog} = open_disk_log(os:timestamp(), InputFile, read_only),
     _ = file:delete(OutputFile),
-    {ok, WriteLog} = open_disk_log(now(), OutputFile, read_write),
+    {ok, WriteLog} = open_disk_log(os:timestamp(), OutputFile, read_write),
     Input = sort_disk_log_input(ReadLog),
     Output = sort_disk_log_output(WriteLog),
     try
@@ -418,9 +426,9 @@ fold_disk_log(eof, _Fun, Acc, _DiskLog) ->
 fold_disk_log({Cont, Terms}, Fun, Acc, DiskLog) ->
     Acc2 = try
                lists:foldl(Fun, Acc, Terms)
-    catch X:Y ->
+    catch ?_exception_(X, Y, StackToken) ->
             lager:error("~s:fold_disk_log: caught ~p ~p @ ~p\n",
-                        [?MODULE, X, Y, erlang:get_stacktrace()]),
+                        [?MODULE, X, Y, ?_get_stacktrace_(StackToken)]),
             Acc
     end,
     fold_disk_log(disk_log:chunk(DiskLog, Cont), Fun, Acc2, DiskLog).
