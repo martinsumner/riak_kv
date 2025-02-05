@@ -535,10 +535,29 @@
 
 %% We left riak_kv.add_paths out on purpose.
 
+%% @doc Direct stat changes
+%% Bypass sidejob for stat updates - increases efficiency, but prevents rate
+%% limiting of stat updates
+{mapping, "direct_stat", "riak_kv.direct_stat", [
+    {default, on},
+    {datatype, flag},
+    hidden
+]}.
+
+%% @doc Direct stat changes
+%% Bypass sidejob for GET and PUT FSMs in creases efficiency but prevents rate
+%% limiting
+{mapping, "direct_fsm", "riak_kv.direct_fsm", [
+    {default, on},
+    {datatype, flag},
+    hidden
+]}.
+
 %% @doc The maximum number of concurrent requests of each type (get or
 %% put) that is allowed. Setting this value to infinite disables
 %% overload protection. The 'erlang.process_limit' should be at least
 %% 3 times more than this setting.
+%% Note that enabling direct_fsm will make this rate limit redundant
 %% @see erlang.process_limit
 {mapping, "max_concurrent_requests", "riak_kv.fsm_limit", [
   {default, 50000},

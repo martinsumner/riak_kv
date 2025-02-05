@@ -676,19 +676,23 @@ summarise_process_memory_by_initial_call(TopN) when is_list(TopN) ->
         )
     ).
 
-%% @doc profile_riak/1
-%% Run eprof for ProfileTime milliseconds.  Will have an impact, so normally
 %% best to restrict ProfileTime to 100ms.  May fail on systems under heavy load
 -spec profile_riak(pos_integer()) -> analyzed|failed.
 profile_riak(ProfileTime) ->
-    eprof:start(),
-    case eprof:start_profiling(erlang:processes()) of
+    profile_riak(ProfileTime, 8 * ProfileTime).
+profile_riak(ProfileTime, MinReportTime) ->
+    {ok, PS} = eprof:start(),
+    P0 = sets:from_list(erlang:processes(), [{version, 2}]),
+    timer:sleep(100),
+    P1 = sets:from_list(erlang:processes(), [{version, 2}]),
+    RootSet = sets:to_list(sets:intersection(P0, P1)) -- [PS],
+    case eprof:start_profiling(RootSet) of
         profiling ->
             timer:sleep(ProfileTime),
             case eprof:stop_profiling() of
                 profiling_stopped ->
                     eprof:analyze(
-                        total, [{filter, [{time, float(10 * ProfileTime)}]}]
+                        total, [{filter, [{time, float(MinReportTime)}]}]
                     ),
                     stopped = eprof:stop(),
                     analyzed;

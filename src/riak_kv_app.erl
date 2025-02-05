@@ -53,16 +53,29 @@
 start(_Type, _StartArgs) ->
     riak_core_util:start_app_deps(riak_kv),
 
-    FSM_Limit = find_fsm_limit(),
+    case application:get_env(riak_kv, direct_fsm, false) of
+        true ->
+            GetFSMCRef = counters:new(1, [write_concurrency]),
+            PutFSMCRef = counters:new(1, [write_concurrency]),
+            application:set_env(riak_kv, get_fsm_active_counter, GetFSMCRef),
+            application:set_env(riak_kv, put_fsm_active_counter, PutFSMCRef),
+            ok;
+        false ->
+            FSM_Limit = find_fsm_limit(),
 
-    sidejob:new_resource(riak_kv_put_fsm_sj, sidejob_supervisor, FSM_Limit),
-    sidejob:new_resource(riak_kv_get_fsm_sj, sidejob_supervisor, FSM_Limit),
+            sidejob:new_resource(riak_kv_put_fsm_sj, sidejob_supervisor, FSM_Limit),
+            sidejob:new_resource(riak_kv_get_fsm_sj, sidejob_supervisor, FSM_Limit),
 
-    Base = [riak_core_stat:prefix(), riak_kv],
-    riak_kv_exometer_sidejob:new_entry(Base ++ [put_fsm, sidejob],
-				       riak_kv_put_fsm_sj, "node_put_fsm", []),
-    riak_kv_exometer_sidejob:new_entry(Base ++ [get_fsm, sidejob],
-                                       riak_kv_get_fsm_sj, "node_get_fsm", []),
+            Base = [riak_core_stat:prefix(), riak_kv],
+            riak_kv_exometer_sidejob:new_entry(
+                Base ++ [put_fsm, sidejob],
+                riak_kv_put_fsm_sj, "node_put_fsm", []
+            ),
+            riak_kv_exometer_sidejob:new_entry(
+                Base ++ [get_fsm, sidejob],
+                riak_kv_get_fsm_sj, "node_get_fsm", []
+            )
+    end,
 
     case app_helper:get_env(riak_kv, direct_stats, false) of
         true ->

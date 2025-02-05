@@ -99,11 +99,21 @@ untrack_bucket(Bucket) when is_binary(Bucket) ->
 
 %% The current number of active get fsms in riak
 active_gets() ->
-    counter_value([?PFX, ?APP, node, gets, fsm, active]).
+    case application:get_env(riak_kv, get_fsm_active_counter, none) of
+        none ->
+            counter_value([?PFX, ?APP, node, gets, fsm, active]);
+        CRef ->
+            counters:get(CRef, 1)
+    end.
 
 %% The current number of active put fsms in riak
 active_puts() ->
-    counter_value([?PFX, ?APP, node, puts, fsm, active]).
+    case application:get_env(riak_kv, put_fsm_active_counter, none) of
+        none ->
+            counter_value([?PFX, ?APP, node, puts, fsm, active]);
+        CRef ->
+            counters:get(CRef, 1)
+    end.
 
 counter_value(Name) ->
     case exometer:get_value(Name, [value]) of

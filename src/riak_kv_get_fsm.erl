@@ -28,6 +28,10 @@
 -include_lib("eunit/include/eunit.hrl").
 -export([test_link/7, test_link/5]).
 -endif.
+
+-compile({nowarn_deprecated_function, 
+            [{gen_fsm, start, 3}]}).
+
 -export([start/6, start_link/6, start/4, start_link/4]).
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
@@ -84,7 +88,8 @@
                 request_type :: undefined | request_type(),
                 override_vnodes = [] :: list(),
                 return_tombstone = false :: boolean(),
-                expected_fetchclock = false :: false | vclock:vclock()
+                expected_fetchclock = false :: false | vclock:vclock(),
+                counter_ref = none :: none|counters:counters_ref()
                }).
 
 -include("riak_kv_dtrace.hrl").
@@ -120,14 +125,24 @@ start_link(ReqId,Bucket,Key,R,Timeout,From) ->
             options()) -> {ok, pid()} | {error, any()}.
 start(From, Bucket, Key, GetOptions) ->
     Args = [From, Bucket, Key, GetOptions],
-    case sidejob_supervisor:start_child(riak_kv_get_fsm_sj,
-                                        gen_fsm, start_link,
-                                        [?MODULE, Args, []]) of
-        {error, overload} ->
-            riak_kv_util:overload_reply(From),
-            {error, overload};
-        {ok, Pid} ->
-            {ok, Pid}
+    case application:get_env(riak_kv, direct_fsm, false) of
+        true ->
+            gen_fsm:start(?MODULE, Args, []);
+        false ->
+            Child =
+                sidejob_supervisor:start_child(
+                    riak_kv_get_fsm_sj,
+                    gen_fsm,
+                    start_link,
+                    [?MODULE, Args, []]
+                ),
+            case Child of
+                {error, overload} ->
+                    riak_kv_util:overload_reply(From),
+                    {error, overload};
+                {ok, Pid} ->
+                    {ok, Pid}
+            end
     end.
 
 %% Included for backward compatibility, in case someone is, say, passing around
@@ -177,11 +192,23 @@ init([From, queue_name, QueueName, Options0]) ->
 init([From, Bucket, Key, Options0]) ->
     StartNow = os:timestamp(),
     Options = proplists:unfold(Options0),
-    StateData = #state{from = From,
-                       options = Options,
-                       bkey = {Bucket, Key},
-                       timing = riak_kv_fsm_timing:add_timing(prepare, []),
-                       startnow = StartNow},
+    ActiveCounter =
+        case application:get_env(riak_kv, get_fsm_active_counter, none) of
+            none ->
+                none;
+            CRef ->
+                counters:add(CRef, 1, 1),
+                CRef
+        end,
+    StateData =
+        #state{
+            from = From,
+            options = Options,
+            bkey = {Bucket, Key},
+            timing = riak_kv_fsm_timing:add_timing(prepare, []),
+            counter_ref = ActiveCounter,
+            startnow = StartNow
+        },
     Trace = app_helper:get_env(riak_kv, fsm_trace_enabled),
     case Trace of
         true ->
@@ -519,7 +546,13 @@ handle_info(_Info, _StateName, StateData) ->
     {stop,badmsg,StateData}.
 
 %% @private
-terminate(Reason, _StateName, _State) ->
+terminate(Reason, _StateName, State) ->
+    case State#state.counter_ref of
+        none ->
+            ok;
+        ActiveCounter ->
+            counters:sub(ActiveCounter, 1, 1)
+    end,
     Reason.
 
 %% @private

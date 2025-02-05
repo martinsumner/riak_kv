@@ -29,9 +29,16 @@
 -include_lib("riak_kv_vnode.hrl").
 -include("riak_kv_types.hrl").
 
--compile({nowarn_deprecated_function, 
-            [{gen_fsm, start_link, 3},
-                {gen_fsm, send_event, 2}]}).
+-compile(
+    {
+        nowarn_deprecated_function, 
+        [
+            {gen_fsm, start_link, 3},
+            {gen_fsm, start, 3},
+            {gen_fsm, send_event, 2}
+        ]
+    }
+).
 
 -behaviour(gen_fsm).
 -define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
@@ -133,7 +140,8 @@
                 trace = false :: boolean(), 
                 tracked_bucket=false :: boolean(), %% track per bucket stats
                 bad_coordinators = [] :: [atom()],
-                coordinator_timeout :: integer()
+                coordinator_timeout :: integer(),
+                counter_ref = none :: none|counters:counters_ref()
                }).
 
 -include("riak_kv_dtrace.hrl").
@@ -161,14 +169,24 @@ start_link(ReqId,RObj,W,DW,Timeout,ResultPid,Options) ->
 
 start(From, Object, PutOptions) ->
     Args = [From, Object, PutOptions],
-    case sidejob_supervisor:start_child(riak_kv_put_fsm_sj,
-                                        gen_fsm, start_link,
-                                        [?MODULE, Args, []]) of
-        {error, overload} ->
-            riak_kv_util:overload_reply(From),
-            {error, overload};
-        {ok, Pid} ->
-            {ok, Pid}
+    case application:get_env(riak_kv, direct_fsm, false) of
+        true ->
+            gen_fsm:start(?MODULE, Args, []);
+        false ->
+            Child =
+                sidejob_supervisor:start_child(
+                    riak_kv_put_fsm_sj,
+                    gen_fsm,
+                    start_link,
+                    [?MODULE, Args, []]
+                ),
+            case Child of
+                {error, overload} ->
+                    riak_kv_util:overload_reply(From),
+                    {error, overload};
+                {ok, Pid} ->
+                    {ok, Pid}
+            end
     end.
 
 %% Included for backward compatibility, in case someone is, say, passing around
@@ -267,13 +285,25 @@ init([From, RObj, Options0]) ->
     CoordTimeout = get_put_coordinator_failure_timeout(),
     Trace = app_helper:get_env(riak_kv, fsm_trace_enabled),
     Options = proplists:unfold(Options0),
-    StateData = #state{from = From,
-                       robj = RObj,
-                       bkey = BKey,
-                       trace = Trace,
-                       options = Options,
-                       timing = riak_kv_fsm_timing:add_timing(prepare, []),
-                       coordinator_timeout=CoordTimeout},
+    ActiveCounter =
+        case application:get_env(riak_kv, put_fsm_active_counter, none) of
+            none ->
+                none;
+            CRef ->
+                counters:add(CRef, 1, 1),
+                CRef
+        end,
+    StateData =
+        #state{
+            from = From,
+            robj = RObj,
+            bkey = BKey,
+            trace = Trace,
+            options = Options,
+            timing = riak_kv_fsm_timing:add_timing(prepare, []),
+            coordinator_timeout=CoordTimeout,
+            counter_ref = ActiveCounter
+        },
     case Trace of
         true ->
             riak_core_dtrace:put_tag([Bucket, $,, Key]),
@@ -723,7 +753,13 @@ handle_info(_Info, _StateName, StateData) ->
     {stop,badmsg,StateData}.
 
 %% @private
-terminate(Reason, _StateName, _State) ->
+terminate(Reason, _StateName, State) ->
+    case State#state.counter_ref of
+        none ->
+            ok;
+        ActiveCounter ->
+            counters:sub(ActiveCounter, 1, 1)
+    end,
     Reason.
 
 %% @private

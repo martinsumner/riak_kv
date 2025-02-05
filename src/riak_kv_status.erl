@@ -83,13 +83,38 @@ are_indexes_fixed(riak_kv_multi_backend, {_Idx, [{backend_status,_,Status}]}) ->
     fixed_index_status(riak_kv_eleveldb_backend, Statuses).
 
 get_stats(web) ->
-    aliases()
-        ++ expand_disk_stats(riak_kv_stat_bc:disk_stats())
-        ++ riak_kv_stat_bc:app_stats();
+    expand_disk_stats(riak_kv_stat_bc:disk_stats())
+    ++ riak_kv_stat_bc:app_stats()
+    ++ fake_sidejob_stats()
+    ++ aliases();
 get_stats(console) ->
-    aliases()
-        ++ riak_kv_stat_bc:disk_stats()
-        ++ riak_kv_stat_bc:app_stats().
+    riak_kv_stat_bc:disk_stats()
+    ++ riak_kv_stat_bc:app_stats()
+    ++ fake_sidejob_stats()
+    ++ aliases().
+
+fake_sidejob_stats() ->
+    case application:get_env(riak_kv, direct_fsm, false) of
+        true ->
+            [
+                {node_get_fsm_active, riak_kv_stat:active_gets()},
+			    {node_get_fsm_active_60s, 0},
+			    {node_get_fsm_in_rate, 0},
+			    {node_get_fsm_out_rate, 0},
+			    {node_get_fsm_rejected, 0},
+			    {node_get_fsm_rejected_60s, 0},
+			    {node_get_fsm_rejected_total, 0},
+                {node_put_fsm_active, riak_kv_stat:active_puts()},
+			    {node_put_fsm_active_60s, 0},
+			    {node_put_fsm_in_rate, 0},
+			    {node_put_fsm_out_rate, 0},
+			    {node_put_fsm_rejected, 0},
+			    {node_put_fsm_rejected_60s, 0},
+			    {node_put_fsm_rejected_total, 0}
+            ];
+        false ->
+            []
+    end.
 
 
 aliases() ->
