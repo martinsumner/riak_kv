@@ -537,20 +537,19 @@
 
 %% @doc Direct stat changes
 %% Bypass sidejob for stat updates - increases efficiency, but prevents rate
-%% limiting of stat updates
-{mapping, "direct_stat", "riak_kv.direct_stat", [
+%% limiting of statistic updates (current limit is 10K persec, but limit not
+%% applied to counter updates)
+{mapping, "direct_stats", "riak_kv.direct_stat", [
     {default, on},
-    {datatype, flag},
-    hidden
+    {datatype, flag}
 ]}.
 
 %% @doc Direct stat changes
-%% Bypass sidejob for GET and PUT FSMs in creases efficiency but prevents rate
+%% Bypass sidejob for GET and PUT FSMs increases efficiency but prevents rate
 %% limiting
 {mapping, "direct_fsm", "riak_kv.direct_fsm", [
-    {default, on},
-    {datatype, flag},
-    hidden
+    {default, off},
+    {datatype, flag}
 ]}.
 
 %% @doc The maximum number of concurrent requests of each type (get or
