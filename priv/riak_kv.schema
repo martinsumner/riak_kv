@@ -539,7 +539,7 @@
 %% Bypass sidejob for stat updates - increases efficiency, but prevents rate
 %% limiting of statistic updates (current limit is 10K persec, but limit not
 %% applied to counter updates)
-{mapping, "direct_stats", "riak_kv.direct_stat", [
+{mapping, "direct_stats", "riak_kv.direct_stats", [
     {default, on},
     {datatype, flag}
 ]}.
