@@ -752,7 +752,13 @@ charsets_provided(RD, Ctx0) ->
 %%      used in the PUT request that stored the document in Riak, or
 %%      "identity" and "gzip" if no encoding was specified at PUT-time.
 encodings_provided(RD, Ctx0) ->
-    DocCtx = ensure_doc(RD, Ctx0),
+    DocCtx =
+        case Ctx0#ctx.method of
+            UpdM when UpdM =:= 'PUT'; UpdM =:= 'POST'; UpdM =:= 'DELETE' ->
+                Ctx0;
+            _ ->
+                ensure_doc(RD, Ctx0)
+        end,
     case DocCtx#ctx.doc of
         {ok, _} ->
             case select_doc(DocCtx) of
