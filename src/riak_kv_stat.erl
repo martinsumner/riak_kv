@@ -26,11 +26,6 @@
 %%      Update each stat with the exported function update/1. Add
 %%      a new stat to the internal stats/0 func to register a new stat with
 %%      folsom.
-%%
-%%      Get the latest aggregation of stats with the exported function
-%%      get_stats/0. Or use folsom_metrics:get_metric_value/1,
-%%      or riak_core_stat_q:get_stats/1.
-%%
 
 -module(riak_kv_stat).
 
@@ -41,7 +36,7 @@
 -endif.
 
 %% API
--export([start_link/0, get_stats/0,
+-export([start_link/0,
          update/1, perform_update/1, register_stats/0, unregister_vnode_stats/1, produce_stats/0,
          leveldb_read_block_errors/0, stat_update_error/3, stop/0]).
 -export([track_bucket/1, untrack_bucket/1]).
@@ -70,11 +65,6 @@ unregister_vnode_stats(Index) ->
     unregister_per_index(gets, Index),
     unregister_per_index(heads, Index),
     unregister_per_index(puts, Index).
-
-%% @spec get_stats() -> proplist()
-%% @doc Get the current aggregation of stats.
-get_stats() ->
-    riak_kv_wm_stats:get_stats().
 
 
 %% Creation of a dynamic stat _must_ be serialized.
@@ -270,6 +260,31 @@ do_update({index_fsm_time, Microsecs, ResultCount}) ->
     ok = exometer:update([P, ?APP, index, fsm, complete], 1),
     ok = exometer:update([P, ?APP, index, fsm, results], ResultCount),
     ok = exometer:update([P, ?APP, index, fsm, time], Microsecs);
+do_update({token_session_time, Microsecs}) ->
+    P = ?PFX,
+    ok = exometer:update([P, ?APP, token, session, complete], 1),
+    ok = exometer:update([P, ?APP, token, session, duration], Microsecs);
+do_update(token_session_timeout) ->
+    P = ?PFX,
+    ok = exometer:update([P, ?APP, token, session, timeout], 1);
+do_update(token_session_refusal) ->
+    P = ?PFX,
+    ok = exometer:update([P, ?APP, token, session, refusal], 1);
+do_update(token_session_unreachable) ->
+    P = ?PFX,
+    ok = exometer:update([P, ?APP, token, session, unreachable], 1);
+do_update(token_session_request_timeout) ->
+    P = ?PFX,
+    ok = exometer:update([P, ?APP, token, session, request_timeout], 1);
+do_update(token_session_preflist_short) ->
+    P = ?PFX,
+    ok = exometer:update([P, ?APP, token, session, preflist_short], 1);
+do_update(token_session_renewal) ->
+    P = ?PFX,
+    ok = exometer:update([P, ?APP, token, session, renewal], 1);
+do_update(token_session_error) ->
+    P = ?PFX,
+    ok = exometer:update([P, ?APP, token, session, error], 1);
 do_update({read_repairs, Preflist}) ->
     ok = exometer:update([?PFX, ?APP, node, gets, read_repairs], 1),
     do_repairs(Preflist);
@@ -798,6 +813,18 @@ stats() ->
      {[list, fsm, create, error], spiral, [], [{one  , list_fsm_create_error},
                                                {count, list_fsm_create_error_total}]},
      {[list, fsm, active], counter, [], [{value, list_fsm_active}]},
+
+     {[token, session, complete], spiral, [], [{one, token_session_complete}]},
+     {[token, session, timeout], spiral, [], [{one, token_session_timeout}]},
+     {[token, session, refusal], spiral, [], [{one, token_session_refusal}]},
+     {[token, session, unreachable], spiral, [], [{one, token_session_unreachable}]},
+     {[token, session, preflist_short], spiral, [], [{one, token_session_preflist_short}]},
+     {[token, session, request_timeout], spiral, [], [{one, token_session_request_timeout}]},
+     {[token, session, renewal], spiral, [], [{one, token_session_renewal}]},
+     {[token, session, error], spiral, [], [{one, token_session_error}]},
+     {[token, session, duration], histogram, [], [{mean, token_session_time_mean},
+                                               {max, token_session_time_100}]},
+
      {[clusteraae, fsm, create], spiral, [], [{one, clusteraae_fsm_create}]},
      {[clusteraae, fsm, create, error], spiral, [], [{one, clusteraae_fsm_create_error}]},
      {[clusteraae, fsm, active], counter, [], [{value, clusteraae_fsm_active}]},
@@ -969,7 +996,6 @@ bc_stats(Pfx) ->
                           {sys_global_heaps_size, ?MODULE, value, [deprecated]},
                           {sys_heap_type, erlang, system_info, [heap_type]},
                           {sys_logical_processors, erlang, system_info, [logical_processors]},
-                          {sys_monitor_count, riak_kv_stat_bc, sys_monitor_count, []},
                           {sys_otp_release, riak_kv_stat_bc, otp_release, []},
                           {sys_port_count, erlang, system_info, [port_count]},
                           {sys_process_count, erlang, system_info, [process_count]},
@@ -1127,7 +1153,7 @@ create_or_update_histogram_test() ->
         Metric = [riak_kv,put_fsm,counter,time],
         ok = repeat_create_or_update(Metric, 1, histogram, 100),
         ?assertNotEqual(exometer:get_value(Metric), 0),
-        Stats = get_stats(),
+        Stats = riak_kv_status:get_stats(web),
         ?LOG_INFO("stats prop list ~s", [Stats]),
         ?assertNotEqual(proplists:get_value({node_put_fsm_counter_time_mean}, Stats), 0)
     after
