@@ -60,7 +60,7 @@
          stop_fold/1,
          get_modstate/1,
          aae_send/1,
-         aae_schedule_nextrebuild/2,
+         aae_prompt_nextrebuild/2,
          aae_get_rebuild_schedule/1,
          aae_set_rebuild_schedule/2,
          aae_get_storeheads/1,
@@ -640,12 +640,12 @@ tictacexchange_complete(Vnode, StartTime, ExchangeResult) ->
                                         StartTime},
                                     riak_kv_vnode_master).
 
--spec aae_schedule_nextrebuild([{partition(), node()}], non_neg_integer()) -> ok.
+-spec aae_prompt_nextrebuild([{partition(), node()}], non_neg_integer()) -> ok.
 %% @doc
-%% Schedule the next rebuilding of tictac trees (emulate tick now, plus a delay)
-aae_schedule_nextrebuild(Vnodes, Delay) ->
+%% Prompt next rebuilding of tictac trees to occur `Delay` seconds from now
+aae_prompt_nextrebuild(Vnodes, Delay) ->
     riak_core_vnode_master:command(Vnodes,
-                                   {schedule_nextrebuild, Delay},
+                                   {prompt_nextrebuild, Delay},
                                    riak_kv_vnode_master).
 
 -spec aae_rebuildpoke([{partition(), node()}]) -> ok.
@@ -1337,10 +1337,16 @@ handle_command({exchange_complete, ExchangeResult, ST},
                             tictac_exchangetime = XT,
                             tictac_skiptick = 0}};
 
-handle_command({schedule_nextrebuild, Delay},
+handle_command({set_nextrebuild, Delay},
                _Sender, State) ->
     AAECntrl = State#state.aae_controller,
-    ok = aae_controller:aae_schedulenextrebuild(AAECntrl, Delay),
+    ok = aae_controller:aae_set_nextrebuild(AAECntrl, Delay),
+    {noreply, State};
+
+handle_command({prompt_nextrebuild, Delay},
+               _Sender, State) ->
+    AAECntrl = State#state.aae_controller,
+    ok = aae_controller:aae_prompt_nextrebuild(AAECntrl, Delay),
     {noreply, State};
 
 handle_command(get_rebuild_schedule,
