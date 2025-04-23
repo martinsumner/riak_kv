@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% Copyright (c) 2014 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2025 TI Tokyo.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -33,40 +33,158 @@ register_cli() ->
     register_all_commands().
 
 register_all_usage() ->
-    clique:register_usage(["riak-admin", "tictacaae"], usage(main)),
-    clique:register_usage(["riak-admin", "tictacaae", "rebuild_schedule"], usage(rebuild_schedule)),
-    clique:register_usage(["riak-admin", "tictacaae", "storeheads"], usage(storeheads)),
-    clique:register_usage(["riak-admin", "tictacaae", "tokenbucket"], usage(tokenbucket)),
-    clique:register_usage(["riak-admin", "tictacaae", "rebuildtick"], usage(simple_envvar)),
-    clique:register_usage(["riak-admin", "tictacaae", "exchangetick"], usage(simple_envvar)),
-    clique:register_usage(["riak-admin", "tictacaae", "maxresults"], usage(simple_envvar)),
-    clique:register_usage(["riak-admin", "tictacaae", "rangeboost"], usage(simple_envvar)),
-    clique:register_usage(["riak-admin", "tictacaae", "rebuildtreeworkers"], usage(pool_size)),
-    clique:register_usage(["riak-admin", "tictacaae", "rebuildstoreworkers"], usage(pool_size)),
-    clique:register_usage(["riak-admin", "tictacaae", "aaefoldworkers"], usage(pool_size)),
-    clique:register_usage(["riak-admin", "tictacaae", "rebuild-soon"], usage(rebuild_soon)),
-    clique:register_usage(["riak-admin", "tictacaae", "rebuild-now"], usage(rebuild_now)),
-    clique:register_usage(["riak-admin", "tictacaae", "treestatus"], usage(treestatus)),
-    clique:register_usage(["riak-admin", "tictacaae", "fold"], usage(fold)).
+    clique:register_usage(["riak-admin", "tictacaae"], main_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "rebuild_schedule"], rebuild_schedule_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "storeheads"], storeheads_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "tokenbucket"], tokenbucket_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "rebuildtick"], simple_envvar_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "exchangetick"], simple_envvar_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "maxresults"], simple_envvar_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "rangeboost"], simple_envvar_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "rebuildtreeworkers"], pool_size_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "rebuildstoreworkers"], pool_size_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "aaefoldworkers"], pool_size_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "rebuild-soon"], rebuild_soon_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "rebuild-now"], rebuild_now_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "treestatus"], treestatus_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "fold"], fold_usage()).
 
 register_all_commands() ->
-    lists:foreach(fun(Args) -> apply(clique, register_command, specs(A)) end,
-                  [rebuild_schedule, storeheads, tokenbucket, simple_envvar,
-                   pool_size, rebuild_soon, rebuild_now, treestatus, fold]).
+    lists:foreach(
+      fun clique:register_command/1,
+      [rebuild_schedule_specs(),
+       storeheads_specs(),
+       tokenbucket_specs(),
+       simple_envvar_specs(),
+       pool_size_specs(),
+       rebuild_soon_specs(),
+       rebuild_now_specs(),
+       treestatus_specs(),
+       fold_specs()
+      ]).
 
-specs(rebuild_schedule) ->
+main(Fun, A, B, C) ->
+    case application:get_env(riak_kv, tictacaae_active) of
+        {ok, active} ->
+            try
+                Fun(A, B, C)
+            catch
+                error:_e:_st ->
+                    io:format("~p / ~p\n\n", [_e, _st]),
+                    clique_status:usage();
+                throw:_ ->
+                    clique_status:usage()
+            end;
+        _ ->
+            clique_status:alert("tictacaae not active\n")
+    end.
+
+main_usage() ->
+    ["riak-admin tictacaae { rebuild_schedule | storeheads | tokenbucket\n",
+     "                     | rebuildtick | exchangetick | maxresults | rangeboost\n",
+     "                     | rebuildtreeworkers | rebuildstoreworkers | aaefoldworkers\n",
+     "                     | rebuild-soon | rebuild-now | treestatus | fold\n",
+     "                     }\n",
+     "See individual subcommand usage for options and arguments\n"
+    ].
+
+
+-define(NODEOPT, {node, [{shortname, "n"}, {longname, "node"}, {typecast, fun clique_typecast:to_node/1}]}).
+-define(PARTITIONOPT, {partition, [{shortname, "p"}, {longname, "partition"}, {typecast, fun to_partition/1}]}).
+
+rebuild_schedule_specs() ->
     [["riak-admin", "tictacaae", "rebuild-schedule"],
-     [],
-     [{node, [{shortname, "n"}, {longname, "node"}, {typecast, fun clique_typecast:to_node/1}]},
-      {partition, [{shortname, "p"}, {longname, "partition"}, {typecast, fun to_partition/1}]},
-     ],
-     fun rebuild_schedule/3
+     [], [?NODEOPT, ?PARTITIONOPT],
+     fun(A, B, C) -> main(fun rebuild_schedule_cmd/3, A, B, C) end
     ].
 
-usage(main) ->
-    [
-     "riak-admin tictacaae \n\n"
+rebuild_schedule_usage() ->
+    ["Set/show rebuild schedule on an AAE controller managing PARTITION on NODE:\n\n",
+     "  riak admin tictacaae rebuild_schedule [-n NODE] [-p PARTITION] [RW RD]\n"
     ].
+
+rebuild_schedule_cmd([_, _ | Args], [], Options) ->
+    Nodes = extract_nodes(Options),
+    Partitions = extract_partitions(Options),
+    ok = tictacaae_cmd_ensure_options_consistent(Nodes, Partitions),
+    case Args of
+        [Arg1, Arg2] ->
+            RS = {RW = ensure_valid_range(Arg1, 0, 5*365*24),  %% ~5 years in hours
+                  RD = ensure_valid_range(Arg2, 0, 1*365*24*3600)},  %% one year
+            post_set_fun(
+              set_rebuild_schedule(Nodes, Partitions, RS),
+              "rebuild_schedule",
+              io_lib:format("RW: ~b, RD: ~b", [RW, RD]));
+        [] ->
+            FmtF = fun({ok, {RW, RD}}) ->
+                           io_lib:format("RW: ~b, RD: ~b", [RW, RD]);
+                      ({error, Reason}) ->
+                           io_lib:format("(error: ~p)", [Reason])
+                   end,
+            clique_status:table(
+              [[{node, N}, {index, P}, {rebuild_schedule, FmtF(Res)}]
+               || {Res, {P, N}} <- get_rebuild_schedule(Nodes, Partitions)]),
+            ok;
+        _ ->
+            clique_status:usage()
+    end.
+
+
+        
+
+post_set_fun(Res, Par, Val) ->
+    case Res of
+        [{ok, {P, N}}] ->
+            clique_status:text(
+              ff("Set ~s to ~s on partition ~b on ~s\n", [Par, Val, P, N]));
+        [{ok, N}] ->
+            clique_status:text(
+              ff("Set ~s to ~s on ~s\n", [Par, Val, N]));
+        Multiple ->
+            case length([PN || {Resx, PN} <- Multiple, Resx == ok]) of
+                AllSucceeded when AllSucceeded == length(Multiple) ->
+                    clique_status:text(
+                      ff("Set ~s to ~s on ~b (v)nodes\n",
+                         [Par, Val, length(Multiple)]));
+                SomeSucceeded when SomeSucceeded > 0 ->
+                    clique_status:text(
+                      ff("Successfully set ~s to ~p on ~b (v)vnodes, but"
+                         " failed on ~b (v)nodes\n",
+                         [Par, Val, SomeSucceeded, length(Multiple) - SomeSucceeded]));
+                _ ->
+                    clique_status:alert(
+                      ff("Failed to set ~s to ~p on all ~b (v)nodes\n",
+                         [Par, Val, length(Multiple)]))
+            end
+    end.
+
+extract_nodes(Options) ->
+    NN = [N || {node, N} <- Options],
+    case lists:member(all, NN) of
+        true ->
+            [node() | nodes()];
+        false ->
+            NN
+    end.
+extract_partitions(Options) ->
+    [P || {partition, P} <- Options].
+
+
+to_partition("all") ->
+    all;
+to_partition(Str) ->
+    try
+        list_to_integer(P)
+    catch _:_ ->
+            {error, bad_partition}
+    end.
+
+tictacaae_cmd_ensure_options_consistent(_, all) -> ok;
+tictacaae_cmd_ensure_options_consistent(NN, Specific) when length(NN) > 1,
+                                                           Specific /= all ->
+    io:format("With multiple nodes, only -p=all is acceptable\n", []),
+    throw(inconsistent_options);
+tictacaae_cmd_ensure_options_consistent(_, _) -> ok.
 
         
 
@@ -80,14 +198,6 @@ tictacaae_cmd_optspecs() ->
      {show,     undefined,  "show", {string, "unbuilt,rebuilding,building"}, "tree states to show"},
      {output,    $o,        "output", {string, ?DEFAULT_AAEFOLD_OUTFILE}, "dump results of an aae fold operation to file (\"-\" for stdout)"}
     ].
-
-tictacaae_cmd_ensure_options_consistent(_, all) -> ok;
-tictacaae_cmd_ensure_options_consistent(NN, Specific) when length(NN) > 1,
-                                                           Specific /= all ->
-    io:format("With multiple nodes, only -p=all is acceptable\n", []),
-    throw(inconsistent_options);
-tictacaae_cmd_ensure_options_consistent(_, _) -> ok.
-
 
 tictacaae_cmd_usage() ->
     %% getopt:usage/3 will print to stderr, so:
@@ -264,23 +374,6 @@ tictacaae_cmd2(Item, {Options, Args}) ->
         {"rangeboost", [Arg1]} ->
             A = ensure_valid_range(Arg1, 0, 60*60*1000*1000),
             set_tictacaae_option(tictacaae_rangeboost, Nodes, A);
-
-        {"rebuild_schedule", [Arg1, Arg2]} ->
-            RS = {RW = ensure_valid_range(Arg1, 0, 5*365*24),  %% ~5 years in hours
-                  RD = ensure_valid_range(Arg2, 0, 1*365*24*3600)},  %% one year
-            PostSetResultF(
-              set_rebuild_schedule(Nodes, Partitions, RS),
-              "rebuild_schedule",
-              io_lib:format("RW: ~b, RD: ~b", [RW, RD]));
-        {"rebuild_schedule", []} ->
-            FmtF = fun({ok, {RW, RD}}) ->
-                           io_lib:format("RW: ~b, RD: ~b", [RW, RD]);
-                      ({error, Reason}) ->
-                           io_lib:format("(error: ~p)", [Reason])
-                   end,
-            [io:format("rebuild_schedule on ~s/~b is: ~s\n", [N, P, FmtF(Res)])
-             || {Res, {P, N}} <- get_rebuild_schedule(Nodes, Partitions)],
-            ok;
 
         {"storeheads", [Arg1]} ->
             Val = list_to_boolean(Arg1),
@@ -789,22 +882,6 @@ time2s({{LRY, LRMo, LRD}, {LRH, LRMi, LRS}}) ->
       io_lib:format("~4.10.0B-~2.10.0B-~2.10.0BT~2.10.0B:~2.10.0B:~2.10.0B",
                     [LRY, LRMo, LRD, LRH, LRMi, LRS])).
 
-extract_nodes(Options) ->
-    NN = [N || {node, N} <- Options],
-    case lists:member("all", NN) of
-        true ->
-            [node() | nodes()];
-        false ->
-            lists:join(",", [list_to_existing_atom(N) || N <- NN])
-    end.
-extract_partitions(Options) ->
-    PP = [P || {partition, P} <- Options],
-    case lists:member("all", PP) of
-        true ->
-            all;
-        false ->
-            [list_to_integer(P) || P <- PP]
-    end.
 extract_show(Options) ->
     PP = string:split(lists:flatten(lists:join(",", [P || {show, P} <- Options])), ",", all),
     case lists:member("all", PP) of

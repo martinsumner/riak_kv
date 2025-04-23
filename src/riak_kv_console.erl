@@ -48,6 +48,8 @@
          bucket_type_list/1
         ]).
 
+-export([command/1]).  %% new callbacks go here, and are to be implemented using clique
+
 -export([ensemble_status/1]).
 
 %% Reused by Yokozuna for printing AAE status.
@@ -56,6 +58,12 @@
          aae_tree_status/1]).
 
 -include_lib("kernel/include/logger.hrl").
+
+
+-spec command([string()]) -> ok.
+command(Cmd) ->
+    clique:run(Cmd).
+
 
 join([NodeStr]) ->
     join(NodeStr, fun riak_core:join/1,
