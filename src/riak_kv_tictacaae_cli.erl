@@ -55,7 +55,10 @@ register_all_commands() ->
       [rebuild_schedule_specs(),
        storeheads_specs(),
        tokenbucket_specs(),
-       simple_envvar_specs(),
+       rebuildtick_specs(),
+       exchangetick_specs(),
+       maxresults_specs(),
+       rangeboost_specs(),
        pool_size_specs(),
        rebuild_soon_specs(),
        rebuild_now_specs(),
@@ -103,10 +106,10 @@ rebuild_schedule_usage() ->
      "  riak admin tictacaae rebuild_schedule [-n NODE] [-p PARTITION] [RW RD]\n"
     ].
 
-rebuild_schedule_cmd([_, _ | Args], [], Options) ->
+rebuild_schedule_cmd([_, _, _ | Args], [], Options) ->
     Nodes = extract_nodes(Options),
     Partitions = extract_partitions(Options),
-    ok = tictacaae_cmd_ensure_options_consistent(Nodes, Partitions),
+    ok = ensure_options_consistent(Nodes, Partitions),
     case Args of
         [Arg1, Arg2] ->
             RS = {RW = ensure_valid_range(Arg1, 0, 5*365*24),  %% ~5 years in hours
@@ -130,7 +133,158 @@ rebuild_schedule_cmd([_, _ | Args], [], Options) ->
     end.
 
 
-        
+storeheads_specs() ->
+    [["riak-admin", "tictacaae", "storeheads"],
+     [], [?NODEOPT, ?PARTITIONOPT],
+     fun(A, B, C) -> main(fun storeheads_cmd/3, A, B, C) end
+    ].
+
+storeheads_usage() ->
+    ["Set/show storeheads flag on an AAE controller managing PARTITION on NODE:\n\n",
+     "  riak admin tictacaae storeheads [-n NODE] [-p PARTITION] [VALUE]\n"
+    ].
+
+storeheads_cmd([_, _, _ | Args], [], Options) ->
+    Nodes = extract_nodes(Options),
+    Partitions = extract_partitions(Options),
+    ok = ensure_options_consistent(Nodes, Partitions),
+    case Args of
+        [Arg1] ->
+            Val = list_to_boolean(Arg1),
+            post_set_fun(
+              set_storeheads(Nodes, Partitions, Val),
+              "storeheads",
+              Val);
+        [] ->
+            FmtF = fun({ok, V}) ->
+                           io_lib:format("~s", [V]);
+                      ({error, Reason}) ->
+                           io_lib:format("(error: ~p)", [Reason])
+                   end,
+            clique_status:table(
+              [[{node, N}, {index, P}, {storeheads, FmtF(Res)}]
+               || {Res, {P, N}} <- get_storeheads(Nodes, Partitions)]),
+            ok;
+        _ ->
+            clique_status:usage()
+    end.
+
+
+tokenbucket_specs() ->
+    [["riak-admin", "tictacaae", "tokenbucket"],
+     [], [?NODEOPT, ?PARTITIONOPT],
+     fun(A, B, C) -> main(fun tokenbucket_cmd/3, A, B, C) end
+    ].
+
+tokenbucket_usage() ->
+    ["Set/show tokenbucket flag on a vnode managing PARTITION on NODE:\n\n",
+     "  riak admin tictacaae tokenbucket [-n NODE] [-p PARTITION] [VALUE]\n"
+    ].
+
+tokenbucket_cmd([_, _, _ | Args], [], Options) ->
+    Nodes = extract_nodes(Options),
+    Partitions = extract_partitions(Options),
+    ok = ensure_options_consistent(Nodes, Partitions),
+    case Args of
+        [Arg1] ->
+            Val = list_to_boolean(Arg1),
+            post_set_fun(
+              set_tokenbucket(Nodes, Partitions, Val),
+              "tokenbucket",
+              Val);
+        [] ->
+            FmtF = fun({ok, V}) ->
+                           io_lib:format("~s", [V]);
+                      ({error, Reason}) ->
+                           io_lib:format("(error: ~p)", [Reason])
+                   end,
+            clique_status:table(
+              [[{node, N}, {index, P}, {tokenbucket, FmtF(Res)}]
+               || {Res, {P, N}} <- get_tokenbucket(Nodes, Partitions)]),
+            ok;
+        _ ->
+            clique_status:usage()
+    end.
+
+
+rebuildtick_specs() ->
+    [["riak-admin", "tictacaae", "rebuildtick"],
+     [], [?NODEOPT],
+     fun(A, B, C) -> main(fun simple_envvar_cmd/3, A, B, C) end
+    ].
+
+exchangetick_specs() ->
+    [["riak-admin", "tictacaae", "exchangetick"],
+     [], [?NODEOPT],
+     fun(A, B, C) -> main(fun simple_envvar_cmd/3, A, B, C) end
+    ].
+
+maxresults_specs() ->
+    [["riak-admin", "tictacaae", "maxresults"],
+     [], [?NODEOPT],
+     fun(A, B, C) -> main(fun simple_envvar_cmd/3, A, B, C) end
+    ].
+
+rangeboost_specs() ->
+    [["riak-admin", "tictacaae", "rangeboost"],
+     [], [?NODEOPT],
+     fun(A, B, C) -> main(fun simple_envvar_cmd/3, A, B, C) end
+    ].
+
+simple_envvar_usage() ->
+    ["Set/show env var VAR on NODE:\n\n",
+     "  riak admin tictacaae VAR [-n NODE] [VALUE]\n\n",
+     "VAR is one of rebuildtick, exchangetick, maxresults, rangeboost\n"
+    ].
+
+simple_envvar_cmd([_, _, Var | Args], [], Options) ->
+    Nodes = extract_nodes(Options),
+    case Args of
+        [Arg1] ->
+            case Var of
+                "rebuildtick" ->
+                    Msec = ensure_valid_range(Arg1, 0, 60*60*1000*1000),
+                    set_tictacaae_envvar(tictacaae_rebuildtick, Nodes, Msec);
+                "exchangetick" ->
+                    MSec = ensure_valid_range(Arg1, 0, 60*60*1000*1000),
+                    set_tictacaae_envvar(tictacaae_exchangetick, Nodes, MSec);
+                "maxresults" ->
+                    A = ensure_valid_range(Arg1, 1, 1000*1000),
+                    set_tictacaae_envvar(tictacaae_maxresults, Nodes, A);
+                "rangeboost" ->
+                    A = ensure_valid_range(Arg1, 0, 60*60*1000*1000),
+                    set_tictacaae_envvar(tictacaae_rangeboost, Nodes, A)
+            end;
+        [] ->
+            case Var of
+                "rebuildtick" ->
+                    print_tictacaae_envvar(tictacaae_rebuildtick, Nodes);
+                "exchangetick" ->
+                    print_tictacaae_envvar(tictacaae_exchangetick, Nodes);
+                "maxresults" ->
+                    print_tictacaae_envvar(tictacaae_maxresults, Nodes);
+                "rangeboost" ->
+                    print_tictacaae_envvar(tictacaae_rangeboost, Nodes)
+            end;
+        _ ->
+            clique_status:usage()
+    end.
+
+print_tictacaae_envvar(A, Nodes) ->
+    clique_status:table(
+      [begin
+           {ok, Current} = rpc:call(Node, application, get_env, [riak_kv, A]),
+           [{node, Node}, {A, Current}]
+       end || Node <- Nodes]).
+
+set_tictacaae_envvar(A, Nodes, V) ->
+    [ok = rpc:call(Node, application, set_env, [riak_kv, A, V])
+     || Node <- Nodes],
+    ok.
+
+
+            
+
 
 post_set_fun(Res, Par, Val) ->
     case Res of
@@ -143,20 +297,18 @@ post_set_fun(Res, Par, Val) ->
         Multiple ->
             case length([PN || {Resx, PN} <- Multiple, Resx == ok]) of
                 AllSucceeded when AllSucceeded == length(Multiple) ->
-                    clique_status:text(
-                      ff("Set ~s to ~s on ~b (v)nodes\n",
-                         [Par, Val, length(Multiple)]));
+                    clique_status_text("Set ~s to ~s on ~b (v)nodes\n",
+                                       [Par, Val, length(Multiple)]);
                 SomeSucceeded when SomeSucceeded > 0 ->
-                    clique_status:text(
-                      ff("Successfully set ~s to ~p on ~b (v)vnodes, but"
-                         " failed on ~b (v)nodes\n",
-                         [Par, Val, SomeSucceeded, length(Multiple) - SomeSucceeded]));
+                    clique_status_text("Successfully set ~s to ~p on ~b (v)vnodes, but"
+                                       " failed on ~b (v)nodes\n",
+                                       [Par, Val, SomeSucceeded, length(Multiple) - SomeSucceeded]);
                 _ ->
-                    clique_status:alert(
-                      ff("Failed to set ~s to ~p on all ~b (v)nodes\n",
-                         [Par, Val, length(Multiple)]))
+                    clique_status_alert("Failed to set ~s to ~p on all ~b (v)nodes\n",
+                                        [Par, Val, length(Multiple)])
             end
     end.
+
 
 extract_nodes(Options) ->
     NN = [N || {node, N} <- Options],
@@ -179,10 +331,10 @@ to_partition(Str) ->
             {error, bad_partition}
     end.
 
-tictacaae_cmd_ensure_options_consistent(_, all) -> ok;
-tictacaae_cmd_ensure_options_consistent(NN, Specific) when length(NN) > 1,
-                                                           Specific /= all ->
-    io:format("With multiple nodes, only -p=all is acceptable\n", []),
+ensure_options_consistent(_, all) -> ok;
+ensure_options_consistent(NN, Specific) when length(NN) > 1,
+                                             Specific /= all ->
+    clique_status_alert("With multiple nodes, only -p=all is acceptable\n", []),
     throw(inconsistent_options);
 tictacaae_cmd_ensure_options_consistent(_, _) -> ok.
 
@@ -203,24 +355,6 @@ tictacaae_cmd_usage() ->
     %% getopt:usage/3 will print to stderr, so:
     io:format(
 "Usage:
-    Set/show rebuild schedule on an AAE controller managing PARTITION on NODE:
-
-        riak admin tictacaae rebuild_schedule [-n NODE] [-p PARTITION] [RW RD]
-
-    Set/show storeheads flag on an AAE controller managing PARTITION on NODE:
-
-        riak admin tictacaae storeheads [-n NODE] [-p PARTITION] [VALUE]
-
-    Set/show tokenbucket flag on a vnode managing PARTITION on NODE:
-
-        riak admin tictacaae tokenbucket [-n NODE] [-p PARTITION] [VALUE]
-
-    Set/show riak_kv tictacaae VAR on NODE:
-
-        riak admin tictacaae VAR [-n NODE] [VAL]
-
-        VAR is one of rebuildtick, exchangetick, maxresults, rangeboost.
-
     Set/show node worker pool sizes on NODE:
 
         riak admin tictacaae POOL [-n NODE] [VAL]
@@ -302,100 +436,13 @@ tictacaae_cmd_usage() ->
         BUCKET, KEY_RANGE and MODIFIED_RANGE are as above.
 ").
 
-tictacaae_cmd([Item | Cmdline]) ->
-    case application:get_env(riak_kv, tictacaae_active) of
-        {ok, active} ->
-            try
-                {ok, Parsed} = getopt:parse(tictacaae_cmd_optspecs(), Cmdline),
-                tictacaae_cmd2(Item, Parsed)
-            catch
-                error:_e:_st ->
-                    io:format("~p / ~p\n\n", [_e, _st]),
-                    tictacaae_cmd_usage();
-                throw:_ ->
-                    tictacaae_cmd_usage()
-            end;
-        _ ->
-            io:format("tictacaae not active\n", [])
-    end;
-tictacaae_cmd(_) ->
-    tictacaae_cmd_usage().
 
 tictacaae_cmd2(Item, {Options, Args}) ->
     Nodes = extract_nodes(Options),
     Partitions = extract_partitions(Options),
     ok = tictacaae_cmd_ensure_options_consistent(Nodes, Partitions),
-    PostSetResultF =
-        fun(Res, Par, Val) ->
-            case Res of
-                [{ok, {P, N}}] ->
-                    io:format("Set ~s to ~s on partition ~b on ~s\n",
-                              [Par, Val, P, N]);
-                [{ok, N}] ->
-                    io:format("Set ~s to ~s on ~s\n",
-                              [Par, Val, N]);
-                Multiple ->
-                    case length([PN || {Resx, PN} <- Multiple, Resx == ok]) of
-                        AllSucceeded when AllSucceeded == length(Multiple) ->
-                            io:format("Set ~s to ~s on ~b (v)nodes\n",
-                                      [Par, Val, length(Multiple)]);
-                        SomeSucceeded when SomeSucceeded > 0 ->
-                            io:format("Successfully set ~s to ~p on ~b (v)vnodes, but"
-                                      " failed on ~b (v)nodes\n",
-                                      [Par, Val, SomeSucceeded, length(Multiple) - SomeSucceeded]);
-                        _ ->
-                            io:format("Failed to set ~s to ~p on all ~b (v)nodes\n",
-                                      [Par, Val, length(Multiple)])
-                    end
-            end
-        end,
 
     case {Item, Args} of
-        {"rebuildtick", []} ->
-            print_tictacaae_option(tictacaae_rebuildtick, Nodes);
-        {"rebuildtick", [Arg1]} ->
-            Msec = ensure_valid_range(Arg1, 0, 60*60*1000*1000),
-            set_tictacaae_option(tictacaae_rebuildtick, Nodes, Msec);
-
-        {"exchangetick", []} ->
-            print_tictacaae_option(tictacaae_exchangetick, Nodes);
-        {"exchangetick", [Arg1]} ->
-            MSec = ensure_valid_range(Arg1, 0, 60*60*1000*1000),
-            set_tictacaae_option(tictacaae_exchangetick, Nodes, MSec);
-
-        {"maxresults", []} ->
-            print_tictacaae_option(tictacaae_maxresults, Nodes);
-        {"maxresults", [Arg1]} ->
-            A = ensure_valid_range(Arg1, 1, 1000*1000),
-            set_tictacaae_option(tictacaae_maxresults, Nodes, A);
-
-        {"rangeboost", []} ->
-            print_tictacaae_option(tictacaae_rangeboost, Nodes);
-        {"rangeboost", [Arg1]} ->
-            A = ensure_valid_range(Arg1, 0, 60*60*1000*1000),
-            set_tictacaae_option(tictacaae_rangeboost, Nodes, A);
-
-        {"storeheads", [Arg1]} ->
-            Val = list_to_boolean(Arg1),
-            PostSetResultF(
-              set_storeheads(Nodes, Partitions, Val),
-              "storeheads",
-              Val);
-        {"storeheads", []} ->
-            [io:format("tictacaae_storeheads on ~s/~b is: ~s\n", [N, P, Res])
-             || {Res, {P, N}} <- get_storeheads(Nodes, Partitions)],
-            ok;
-
-        {"tokenbucket", [Arg1]} ->
-            Val = list_to_boolean(Arg1),
-            PostSetResultF(
-              set_tokenbucket(Nodes, Partitions, Val),
-              "tokenbucket",
-              Val);
-        {"tokenbucket", []} ->
-            [io:format("tictacaae_tokenbucket on ~s/~b is: ~s\n", [N, P, Res])
-             || {Res, {P, N}} <- get_tokenbucket(Nodes, Partitions)],
-            ok;
 
         {"rebuild-soon", [Arg1]} ->
             AffectedVNodes = schedule_nextrebuild(Nodes, Partitions, list_to_integer(Arg1)),
@@ -469,18 +516,6 @@ list_to_boolean("on") -> true;
 list_to_boolean("false") -> false;
 list_to_boolean("disabled") -> false;
 list_to_boolean("off") -> false.
-
-print_tictacaae_option(A, Nodes) ->
-    [begin
-         {ok, Current} = rpc:call(Node, application, get_env, [riak_kv, A]),
-         io:format("~s on ~s is: ~p\n", [A, Node, Current])
-     end || Node <- Nodes],
-    ok.
-
-set_tictacaae_option(A, Nodes, V) ->
-    [ok = rpc:call(Node, application, set_env, [riak_kv, A, V])
-     || Node <- Nodes],
-    ok.
 
 schedule_nextrebuild(Nodes, Partitions, Delay) ->
     exec_command_on_vnodes(Nodes, Partitions, {aae_schedule_nextrebuild, [Delay]}).
@@ -894,3 +929,7 @@ extract_show(Options) ->
 ending([_]) -> "";
 ending(_) -> "s".
 
+clique_status_text(F, A) ->
+    clique_status:text(io_lib:format(F, A)).
+clique_status_alert(F, A) ->
+    clique_status:alert(io_lib:format(F, A)).
