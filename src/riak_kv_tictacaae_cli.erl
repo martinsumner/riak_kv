@@ -59,7 +59,9 @@ register_all_commands() ->
        exchangetick_specs(),
        maxresults_specs(),
        rangeboost_specs(),
-       pool_size_specs(),
+       rebuildtreeworkers_specs(),
+       rebuildstoreworkers_specs(),
+       aaefoldworkers_specs(),
        rebuild_soon_specs(),
        rebuild_now_specs(),
        treestatus_specs(),
@@ -283,8 +285,135 @@ set_tictacaae_envvar(A, Nodes, V) ->
     ok.
 
 
-            
+rebuildtreeworkers_specs() ->
+    [["riak-admin", "tictacaae", "rebuildtreeworkers"],
+     [], [?NODEOPT],
+     fun(A, B, C) -> main(fun pool_size_cmd/3, A, B, C) end
+    ].
 
+rebuildstoreworkers_specs() ->
+    [["riak-admin", "tictacaae", "rebuildstoreworkers"],
+     [], [?NODEOPT],
+     fun(A, B, C) -> main(fun pool_size_cmd/3, A, B, C) end
+    ].
+
+aaefoldworkers_specs() ->
+    [["riak-admin", "tictacaae", "aaefoldworkers"],
+     [], [?NODEOPT],
+     fun(A, B, C) -> main(fun pool_size_cmd/3, A, B, C) end
+    ].
+
+poolsize_usage() ->
+    ["Set/show node worker pool sizes on NODE:\n\n",
+     "  riak admin tictacaae POOL [-n NODE] [VAL]\n\n",
+     "POOL is one of rebuildtreeworkers, rebuildstoreworkers, aaefoldworkers.\n"
+    ].
+
+pool_size_cmd([_, _, Var | Args], [], Options) ->
+    Nodes = extract_nodes(Options),
+    case Args of
+        [Arg1] ->
+            case Var of
+                "rebuildtreeworkers" ->
+                    Val = ensure_valid_range(Arg1, 1, 500),
+                    post_set_fun(
+                      set_worker_pool_size(Nodes, af1_pool, Val),
+                      "rebuildtreeworkers",
+                      integer_to_list(Val));
+                "aaefoldworkers" ->
+                    Val = ensure_valid_range(Arg1, 1, 500),
+                    post_set_fun(
+                      set_worker_pool_size(Nodes, af4_pool, Val),
+                      "aaefoldworkers",
+                      integer_to_list(Val));
+                "rebuildstoreworkers" ->
+                    Val = ensure_valid_range(Arg1, 1, 500),
+                    post_set_fun(
+                      set_worker_pool_size(Nodes, be_pool, Val),
+                      "rebuildstoreworkers",
+                      integer_to_list(Val))
+            end;
+        [] ->
+            case Var of
+                "rebuildtreeworkers" ->
+                    print_pool_size(af1_pool, Nodes);
+                "aaefoldworkers" ->
+                    print_pool_size(af4_pool, Nodes);
+                "rebuildstoreworkers" ->
+                    print_pool_size(be_pool, Nodes)
+            end;
+        _ ->
+            clique_status:usage()
+    end.
+
+print_pool_size(Pool, Nodes) ->
+    clique_status:table(
+      [begin
+           Res = rpc:call(Node, riak_core_node_worker_pool, get_worker_pool_size, [Pool]),
+           [{node, Node}, {Pool, Res}]
+       end || Node <- Nodes]).
+
+set_pool_size(Pool, Nodes, Val) ->
+    [ok = rpc:call(N, riak_core_node_worker_pool, set_worker_pool_size, [Pool, Val])
+     || Node <- Nodes],
+    ok.
+
+
+rebuild_soon_specs() ->
+    [["riak-admin", "tictacaae", "rebuild-soon"],
+     [], [?NODEOPT, ?PARTITIONOPT],
+     fun(A, B, C) -> main(fun rebuild_soon_cmd/3, A, B, C) end
+    ].
+
+rebuild_soon_usage() ->
+    ["Set next rebuild time to now + DELAY sec, on PARTITION on NODE (default is\n",
+     "all partitions on local node):\n\n",
+     "  riak admin tictacaae rebuild-soon [-n NODE] [-p PARTITION] DELAY\n"
+    ].
+
+rebuild_soon_cmd([_, _, Arg], [], Options) ->
+    Nodes = extract_nodes(Options),
+    Partitions = extract_partitions(Options),
+    ok = ensure_options_consistent(Nodes, Partitions),
+    AffectedVNodes = schedule_nextrebuild(
+                       Nodes, Partitions, list_to_integer(Arg1)),
+    if length(Nodes) == 1 ->
+            clique_status_text(
+              "scheduled rebuild of aae trees on ~b partition~s on ~s\n",
+              [length(AffectedVNodes), ending(AffectedVNodes), hd(Nodes)]);
+       el/=se ->
+            clique_status_text(
+              "scheduled rebuild of aae trees on ~b nodes\n",
+              [length(Nodes)])
+    end.
+
+
+rebuild_now_specs() ->
+    [["riak-admin", "tictacaae", "rebuild-now"],
+     [], [?NODEOPT, ?PARTITIONOPT],
+     fun(A, B, C) -> main(fun rebuild_now_cmd/3, A, B, C) end
+    ].
+
+rebuild_now_usage() ->
+    ["Same as \"rebuild-soon 0\", plus send a rebuild poke:\n\n",
+     "  riak admin tictacaae rebuild-now [-n NODE] [-p PARTITION] DELAY\n"
+    ].
+
+rebuild_now_cmd([_, _], [], Options) ->
+    Nodes = extract_nodes(Options),
+    Partitions = extract_partitions(Options),
+    ok = ensure_options_consistent(Nodes, Partitions),
+    AffectedVNodes = schedule_nextrebuild(Nodes, Partitions, 0),
+    send_rebuildpoke(Nodes, Partitions),
+    if length(Nodes) == 1 ->
+            clique_status_text(
+              "rebuilding aae trees on ~b partition~s on ~s\n",
+              [length(AffectedVNodes), ending(AffectedVNodes), hd(Nodes)]);
+       el/=se ->
+            clique_status_text(
+              "rebuilding aae trees on ~b nodes\n",
+              [length(Nodes)])
+    end.
 
 post_set_fun(Res, Par, Val) ->
     case Res of
@@ -309,7 +438,6 @@ post_set_fun(Res, Par, Val) ->
             end
     end.
 
-
 extract_nodes(Options) ->
     NN = [N || {node, N} <- Options],
     case lists:member(all, NN) of
@@ -320,7 +448,6 @@ extract_nodes(Options) ->
     end.
 extract_partitions(Options) ->
     [P || {partition, P} <- Options].
-
 
 to_partition("all") ->
     all;
@@ -338,14 +465,129 @@ ensure_options_consistent(NN, Specific) when length(NN) > 1,
     throw(inconsistent_options);
 tictacaae_cmd_ensure_options_consistent(_, _) -> ok.
 
+schedule_nextrebuild(NN, PP, Delay) ->
+    exec_command_on_vnodes(NN, PP, {aae_schedule_nextrebuild, [Delay]}).
+get_rebuild_schedule(NN, PP) ->
+    exec_command_on_vnodes(NN, PP, {aae_get_rebuild_schedule, []}).
+set_rebuild_schedule(NN, PP, RS) ->
+    exec_command_on_vnodes(NN, PP, {aae_set_rebuild_schedule, [RS]}).
+get_storeheads(NN, PP) ->
+    exec_command_on_vnodes(NN, PP, {aae_get_storeheads, []}).
+set_storeheads(NN, PP, A) ->
+    exec_command_on_vnodes(NN, PP, {aae_set_storeheads, [A]}).
+get_tokenbucket(NN, PP) ->
+    exec_command_on_vnodes(NN, PP, {aae_get_tokenbucket, []}).
+set_tokenbucket(NN, PP, A) ->
+    exec_command_on_vnodes(NN, PP, {aae_set_tokenbucket, [A]}).
+send_rebuildpoke(NN, PP) ->
+    exec_command_on_vnodes(NN, PP, {aae_rebuildpoke, []}).
+
+exec_command_on_vnodes(Nodes, Partitions, {F, A}) ->
+    lists:foldl(
+      fun(Node, Q) ->
+              VVNN = vnodes(Node, Partitions),
+              Res = [{rpc:call(Node, riak_kv_vnode, F, [VN | A]), VN} || VN <- VVNN],
+              Q ++ Res
+      end, [], Nodes).
+vnodes(Node, all) ->
+    {ok, Ring} = rpc:call(Node, riak_core_ring_manager, get_my_ring, []),
+    [VN || VN = {_, Owner} <- rpc:call(Node, riak_core_ring, all_owners, [Ring]), Owner =:= Node];
+vnodes(Node, List) ->
+    [{P, Node} || P <- List].
+
+list_to_boolean("true") -> true;
+list_to_boolean("enabled") -> true;
+list_to_boolean("on") -> true;
+list_to_boolean("false") -> false;
+list_to_boolean("disabled") -> false;
+list_to_boolean("off") -> false.
+
+
+treestatus_specs() ->
+    [["riak-admin", "tictacaae", "treestatus"],
+     [], [{show, [{shortname, "s"}, {longname, "show"}, {typecast, fun to_show_state/1}]},
+          {format, [{shortname, "f"}, {longname, "format"}, {typecast, fun to_format/1}]}],
+     fun(A, B, C) -> main(fun treestatus_cmd/3, A, B, C) end
+    ].
+
+treestatus_usage() ->
+    ["Generate the tree rebuild report:\n\n",
+     "  riak admin tictacaae treestatus [--format table|json] [--show STATES]\n\n",
+     "STATES is a comma-separated list of 'unbuilt', 'built',\n",
+     "'rebuilding', 'building', or 'all'. Default is\n",
+     "'unbuilt,rebuilding,building'.\n"
+    ].
+
+treestatus_cmd([_, _], [], Options) ->
+    Report = produce_aae_progress_report(),
+    Format = proplists:get_value(format, Options),
+    print_aae_progress_report(Format, Report, Options).
+
+produce_aae_progress_report() ->
+    VVSS =
+        lists:append(
+          [case sys:get_state(P) of
+               {active, _CoreVnodeState = {state, Idx, riak_kv_vnode, VSx, _, _, _, _, _, _, _, _}} ->
+                   [{Idx, VSx}];
+               _ ->
+                   []
+           end || {_, P, _, _} <- supervisor:which_children(riak_core_vnode_sup)]),
+
+    [begin
+         AAECntrl = riak_kv_vnode:aae_controller(VNState),
+         TictacRebuilding = riak_kv_vnode:aae_rebuilding(VNState),
+
+         KeyStore = aae_controller:aae_get_key_store(AAECntrl),
+
+         KeyStoreCurrentStatus = if is_pid(KeyStore) ->
+                                         element(1, aae_keystore:store_currentstatus(KeyStore));
+                                    el/=se ->
+                                         not_running
+                                 end,
+
+         LastRebuild = case aae_keystore:store_last_rebuild(KeyStore) of
+                           never ->
+                               never;
+                           TS ->
+                               calendar:now_to_local_time(TS)
+                       end,
+         NextRebuild = calendar:now_to_local_time(
+                         aae_controller:aae_nextrebuild(AAECntrl)),
+
+         TreeCaches = [Pid || {_Preflist, Pid} <- aae_controller:aae_get_tree_caches(AAECntrl)],
+         TotalDirtySegments = lists:sum(
+                                [aae_treecache:cache_segment_count(P) || P <- TreeCaches]),
+         InProgress = TictacRebuilding /= false,
+         Status =
+             case {LastRebuild, InProgress, NextRebuild} of
+                 {never, false, Scheduled} when Scheduled /= undefined ->
+                     unbuilt;
+                 {Built, false, _} when Built /= never ->
+                     built;
+                 {Built, true, _} when Built /= never ->
+                     rebuilding;
+                 {never, true, _} ->
+                     building
+             end,
+         [{partition, Idx},
+          {key_store_current_status, KeyStoreCurrentStatus},
+          {last_rebuild, time2s(LastRebuild)},
+          {next_rebuild, time2s(NextRebuild)},
+          {total_dirty_segments, TotalDirtySegments},
+          {controller_pid, list_to_binary(pid_to_list(AAECntrl))},
+          {status, Status}
+         ]
+     end || {Idx, VNState} <- VVSS].
+
+
+    
+
         
 
 -define(DEFAULT_AAEFOLD_OUTFILE, "aaefold-%o-results-%t.json").
 
 tictacaae_cmd_optspecs() ->
     [
-     {node,      $n,        "node",        {string, atom_to_list(node())},  "Node, or all"},
-     {partition, $p,        "partition",   {string, "all"},   "Partition, or all"},
      {format,   undefined,  "format",      {string, "table"}, "table or json"},
      {show,     undefined,  "show", {string, "unbuilt,rebuilding,building"}, "tree states to show"},
      {output,    $o,        "output", {string, ?DEFAULT_AAEFOLD_OUTFILE}, "dump results of an aae fold operation to file (\"-\" for stdout)"}
@@ -355,29 +597,6 @@ tictacaae_cmd_usage() ->
     %% getopt:usage/3 will print to stderr, so:
     io:format(
 "Usage:
-    Set/show node worker pool sizes on NODE:
-
-        riak admin tictacaae POOL [-n NODE] [VAL]
-
-        POOL is one of rebuildtreeworkers, rebuildstoreworkers, aaefoldworkers.
-
-    Set next rebuild time to now + DELAY sec, on PARTITION on NODE (default is
-    all partitions on local node):
-
-        riak admin tictacaae rebuild-soon [-n NODE] [-p PARTITION] DELAY
-
-    Same as \"rebuild-soon 0\", plus send a rebuild poke:
-
-        riak admin tictacaae rebuild-now [-n NODE] [-p PARTITION] DELAY
-
-    Print the tree rebuild status:
-
-        riak admin tictacaae treestatus [--format table|json] [--show STATES]
-
-        STATES is a comma-separated list of 'unbuilt', 'built',
-        'rebuilding', 'building', or 'all'. Default is
-        'unbuilt,rebuilding,building'.
-
     AAE fold operations, dumping results in JSON format to a file specified with '-o'.
 
     List buckets:
@@ -437,188 +656,10 @@ tictacaae_cmd_usage() ->
 ").
 
 
-tictacaae_cmd2(Item, {Options, Args}) ->
-    Nodes = extract_nodes(Options),
-    Partitions = extract_partitions(Options),
-    ok = tictacaae_cmd_ensure_options_consistent(Nodes, Partitions),
-
-    case {Item, Args} of
-
-        {"rebuild-soon", [Arg1]} ->
-            AffectedVNodes = schedule_nextrebuild(Nodes, Partitions, list_to_integer(Arg1)),
-            if length(Nodes) == 1 ->
-                    io:format("scheduled rebuild of aae trees on ~b partition~s on ~s\n",
-                              [length(AffectedVNodes), ending(AffectedVNodes), hd(Nodes)]);
-               el/=se ->
-                    io:format("scheduled rebuild of aae trees on ~b nodes\n",
-                              [length(Nodes)])
-            end;
-
-        {"rebuild-now", []} ->
-            AffectedVNodes = schedule_nextrebuild(Nodes, Partitions, 0),
-            send_rebuildpoke(Nodes, Partitions),
-            if length(Nodes) == 1 ->
-                    io:format("rebuilding aae trees on ~b partition~s on ~s\n",
-                              [length(AffectedVNodes), ending(AffectedVNodes), hd(Nodes)]);
-               el/=se ->
-                    io:format("rebuilding aae trees on ~b nodes\n",
-                              [length(Nodes)])
-            end;
-
-        {"rebuildtreeworkers", [Arg1]} ->
-            Val = ensure_valid_range(Arg1, 1, 500),
-            PostSetResultF(
-              set_worker_pool_size(Nodes, af1_pool, Val),
-              "rebuildtreeworkers",
-              integer_to_list(Val));
-        {"rebuildtreeworkers", []} ->
-            [io:format("rebuildtreeworkers on ~s is: ~b\n", [N, Res])
-             || {Res, N} <- get_worker_pool_size(Nodes, af1_pool)],
-            ok;
-
-        {"aaefoldworkers", [Arg1]} ->
-            Val = ensure_valid_range(Arg1, 1, 500),
-            PostSetResultF(
-              set_worker_pool_size(Nodes, af4_pool, Val),
-              "aaefoldworkers",
-              integer_to_list(Val));
-        {"aaefoldworkers", []} ->
-            [io:format("aaefoldworkers on ~s is: ~b\n", [N, Res])
-             || {Res, N} <- get_worker_pool_size(Nodes, af4_pool)],
-            ok;
-
-        {"rebuildstoreworkers", [Arg1]} ->
-            Val = ensure_valid_range(Arg1, 1, 500),
-            PostSetResultF(
-              set_worker_pool_size(Nodes, be_pool, Val),
-              "rebuildstoreworkers",
-              integer_to_list(Val));
-        {"rebuildstoreworkers", []} ->
-            [io:format("rebuildstoreworkers on ~s is: ~b\n", [N, Res])
-             || {Res, N} <- get_worker_pool_size(Nodes, be_pool)],
-            ok;
-
-        {"treestatus", []} ->
-            case {Nodes, Partitions} of
-                {[N], all} when N == node() ->
-                    print_aae_progress_report(Options);
-                _ ->
-                    io:format("treestatus option only supported on local node\n", [])
-            end;
-
-        _ ->
-            tictacaae_cmd3(Item, {Options, Args})
-    end.
-
-list_to_boolean("true") -> true;
-list_to_boolean("enabled") -> true;
-list_to_boolean("on") -> true;
-list_to_boolean("false") -> false;
-list_to_boolean("disabled") -> false;
-list_to_boolean("off") -> false.
-
-schedule_nextrebuild(Nodes, Partitions, Delay) ->
-    exec_command_on_vnodes(Nodes, Partitions, {aae_schedule_nextrebuild, [Delay]}).
-get_rebuild_schedule(Nodes, Partitions) ->
-    exec_command_on_vnodes(Nodes, Partitions, {aae_get_rebuild_schedule, []}).
-set_rebuild_schedule(Nodes, Partitions, RS) ->
-    exec_command_on_vnodes(Nodes, Partitions, {aae_set_rebuild_schedule, [RS]}).
-get_storeheads(Nodes, Partitions) ->
-    exec_command_on_vnodes(Nodes, Partitions, {aae_get_storeheads, []}).
-set_storeheads(Nodes, Partitions, A) ->
-    exec_command_on_vnodes(Nodes, Partitions, {aae_set_storeheads, [A]}).
-get_tokenbucket(Nodes, Partitions) ->
-    exec_command_on_vnodes(Nodes, Partitions, {aae_get_tokenbucket, []}).
-set_tokenbucket(Nodes, Partitions, A) ->
-    exec_command_on_vnodes(Nodes, Partitions, {aae_set_tokenbucket, [A]}).
-send_rebuildpoke(Nodes, Partitions) ->
-    exec_command_on_vnodes(Nodes, Partitions, {aae_rebuildpoke, []}).
-
-exec_command_on_vnodes(Nodes, Partitions, {F, A}) ->
-    lists:foldl(
-      fun(Node, Q) ->
-              VVNN = vnodes(Node, Partitions),
-              Res = [{rpc:call(Node, riak_kv_vnode, F, [VN | A]), VN} || VN <- VVNN],
-              Q ++ Res
-      end, [], Nodes).
-vnodes(Node, all) ->
-    {ok, Ring} = rpc:call(Node, riak_core_ring_manager, get_my_ring, []),
-    [VN || VN = {_, Owner} <- rpc:call(Node, riak_core_ring, all_owners, [Ring]), Owner =:= Node];
-vnodes(Node, List) ->
-    [{P, Node} || P <- List].
-
-set_worker_pool_size(Nodes, Pool, A) ->
-    [{rpc:call(N, riak_core_node_worker_pool, set_worker_pool_size, [Pool, A]), N} || N <- Nodes].
-get_worker_pool_size(Nodes, Pool) ->
-    [{rpc:call(N, riak_core_node_worker_pool, get_worker_pool_size, [Pool]), N} || N <- Nodes].
-
-
-produce_aae_progress_report() ->
-    VVSS =
-        lists:append(
-          [case sys:get_state(P) of
-               {active, _CoreVnodeState = {state, Idx, riak_kv_vnode, VSx, _, _, _, _, _, _, _, _}} ->
-                   [{Idx, VSx}];
-               _ ->
-                   []
-           end || {_, P, _, _} <- supervisor:which_children(riak_core_vnode_sup)]),
-
-    [begin
-         AAECntrl = riak_kv_vnode:aae_controller(VNState),
-         TictacRebuilding = riak_kv_vnode:aae_rebuilding(VNState),
-
-         KeyStore = aae_controller:aae_get_key_store(AAECntrl),
-
-         KeyStoreCurrentStatus = if is_pid(KeyStore) ->
-                                         element(1, aae_keystore:store_currentstatus(KeyStore));
-                                    el/=se ->
-                                         not_running
-                                 end,
-
-         LastRebuild = case aae_keystore:store_last_rebuild(KeyStore) of
-                           never ->
-                               never;
-                           TS ->
-                               calendar:now_to_local_time(TS)
-                       end,
-         NextRebuild = calendar:now_to_local_time(
-                         aae_controller:aae_nextrebuild(AAECntrl)),
-
-         TreeCaches = [Pid || {_Preflist, Pid} <- aae_controller:aae_get_tree_caches(AAECntrl)],
-         TotalDirtySegments = lists:sum(
-                                [aae_treecache:cache_segment_count(P) || P <- TreeCaches]),
-         InProgress = TictacRebuilding /= false,
-         Status =
-             case {LastRebuild, InProgress, NextRebuild} of
-                 {never, false, Scheduled} when Scheduled /= undefined ->
-                     unbuilt;
-                 {Built, false, _} when Built /= never ->
-                     built;
-                 {Built, true, _} when Built /= never ->
-                     rebuilding;
-                 {never, true, _} ->
-                     building
-             end,
-         [{partition, Idx},
-          {key_store_current_status, KeyStoreCurrentStatus},
-          {last_rebuild, time2s(LastRebuild)},
-          {next_rebuild, time2s(NextRebuild)},
-          {total_dirty_segments, TotalDirtySegments},
-          {controller_pid, list_to_binary(pid_to_list(AAECntrl))},
-          {status, Status}
-         ]
-     end || {Idx, VNState} <- VVSS].
-
-
-print_aae_progress_report(Options) ->
-    Report = produce_aae_progress_report(),
-    Format = proplists:get_value(format, Options),
-    aae_progress_report(Format, Report, Options).
-
-aae_progress_report("json", Report, _) ->
+print_aae_progress_report("json", Report, _) ->
     io:format("~s\n", [mochijson2:encode(Report)]);
 
-aae_progress_report("table", Report, Options) ->
+print_aae_progress_report("table", Report, Options) ->
     ShowValue = extract_show(Options),
     Show = [list_to_atom(A) || A <- ShowValue],
     io:format("~52s  ~10s  ~21s  ~20s  ~15s  ~16s\n", ["Partition ID", "Status", "Last Rebuild Date", "Next Rebuild Date", "Controller PID", "Key Store Status"]),
@@ -917,7 +958,7 @@ time2s({{LRY, LRMo, LRD}, {LRH, LRMi, LRS}}) ->
       io_lib:format("~4.10.0B-~2.10.0B-~2.10.0BT~2.10.0B:~2.10.0B:~2.10.0B",
                     [LRY, LRMo, LRD, LRH, LRMi, LRS])).
 
-extract_show(Options) ->
+to_show_state(Options) ->
     PP = string:split(lists:flatten(lists:join(",", [P || {show, P} <- Options])), ",", all),
     case lists:member("all", PP) of
         true ->
