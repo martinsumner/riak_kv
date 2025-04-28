@@ -94,8 +94,12 @@ main_usage() ->
     ].
 
 
--define(NODEOPT, {node, [{shortname, "n"}, {longname, "node"}, {typecast, fun clique_typecast:to_node/1}]}).
--define(PARTITIONOPT, {partition, [{shortname, "p"}, {longname, "partition"}, {typecast, fun to_partition/1}]}).
+-define(NODEOPT, {node, [{shortname, "n"},
+                         {longname, "node"},
+                         {typecast, fun clique_typecast:to_node/1}]}).
+-define(PARTITIONOPT, {partition, [{shortname, "p"},
+                                   {longname, "partition"},
+                                   {typecast, fun to_partition/1}]}).
 
 rebuild_schedule_specs() ->
     [["riak-admin", "tictacaae", "rebuild-schedule"],
@@ -518,45 +522,48 @@ treestatus_usage() ->
      "'unbuilt,rebuilding,building'.\n"
     ].
 
-treestatus_cmd([_, _], [], Options) ->
+treestatus_cmd([_, _, _], [], Options) ->
     Report = produce_aae_progress_report(),
-    Format = proplists:get_value(format, Options),
-    print_aae_progress_report(Format, Report, Options).
+    print_aae_progress_report(Report, Options).
 
 produce_aae_progress_report() ->
     VVSS =
         lists:append(
           [case sys:get_state(P) of
-               {active, _CoreVnodeState = {state, Idx, riak_kv_vnode, VSx, _, _, _, _, _, _, _, _}} ->
+               {active, _CoreVnodeState =
+                    {state, Idx, riak_kv_vnode, VSx, _, _, _, _, _, _, _, _}} ->
                    [{Idx, VSx}];
                _ ->
                    []
            end || {_, P, _, _} <- supervisor:which_children(riak_core_vnode_sup)]),
-
     [begin
          AAECntrl = riak_kv_vnode:aae_controller(VNState),
          TictacRebuilding = riak_kv_vnode:aae_rebuilding(VNState),
 
          KeyStore = aae_controller:aae_get_key_store(AAECntrl),
 
-         KeyStoreCurrentStatus = if is_pid(KeyStore) ->
-                                         element(1, aae_keystore:store_currentstatus(KeyStore));
-                                    el/=se ->
-                                         not_running
-                                 end,
+         KeyStoreCurrentStatus =
+             if is_pid(KeyStore) ->
+                     element(1, aae_keystore:store_currentstatus(KeyStore));
+                el/=se ->
+                     not_running
+             end,
 
-         LastRebuild = case aae_keystore:store_last_rebuild(KeyStore) of
-                           never ->
-                               never;
-                           TS ->
-                               calendar:now_to_local_time(TS)
-                       end,
+         LastRebuild =
+             case aae_keystore:store_last_rebuild(KeyStore) of
+                 never ->
+                     never;
+                 TS ->
+                     calendar:now_to_local_time(TS)
+             end,
          NextRebuild = calendar:now_to_local_time(
                          aae_controller:aae_nextrebuild(AAECntrl)),
 
-         TreeCaches = [Pid || {_Preflist, Pid} <- aae_controller:aae_get_tree_caches(AAECntrl)],
-         TotalDirtySegments = lists:sum(
-                                [aae_treecache:cache_segment_count(P) || P <- TreeCaches]),
+         TreeCaches =
+             [Pid || {_PL, Pid} <- aae_controller:aae_get_tree_caches(AAECntrl)],
+         TotalDirtySegments =
+             lists:sum(
+               [aae_treecache:cache_segment_count(P) || P <- TreeCaches]),
          InProgress = TictacRebuilding /= false,
          Status =
              case {LastRebuild, InProgress, NextRebuild} of
@@ -579,109 +586,80 @@ produce_aae_progress_report() ->
          ]
      end || {Idx, VNState} <- VVSS].
 
+print_aae_progress_report(Report, Options) ->
+    ShowValue = extract_show(Options),
+    Show = [list_to_atom(A) || A <- ShowValue],
+    Rows = [begin
+                Idx = proplists:get_value(partition, M),
+                LastRebuild = proplists:get_value(last_rebuild, M),
+                NextRebuild = proplists:get_value(next_rebuild, M),
+                ControllerPid = proplists:get_value(controller_pid, M),
+                Status = proplists:get_value(status, M),
+                KeyStoreCurrentStatus = proplists:get_value(key_store_current_status, M),
+                case lists:member(Status, Show) of
+                    true ->
+                        [{idx, Idx},
+                         {status, Status},
+                         {last_rebuild, LastRebuild},
+                         {next_rebuild, NextRebuild},
+                         {aae_cntr_pid, ControllerPid},
+                         {keystore_status, KeyStoreCurrentStatus}];
+                    false ->
+                        []
+                end
+            end || M <- Report],
+    clique_status:table(Rows),
+    ok.
 
-    
 
-        
 
 -define(DEFAULT_AAEFOLD_OUTFILE, "aaefold-%o-results-%t.json").
 
-tictacaae_cmd_optspecs() ->
-    [
-     {format,   undefined,  "format",      {string, "table"}, "table or json"},
-     {show,     undefined,  "show", {string, "unbuilt,rebuilding,building"}, "tree states to show"},
-     {output,    $o,        "output", {string, ?DEFAULT_AAEFOLD_OUTFILE}, "dump results of an aae fold operation to file (\"-\" for stdout)"}
+fold_specs() ->
+    [["riak-admin", "tictacaae", "fold"],
+     [], [{output, [{shortname, "o"},
+                    {longname, "outfile"},
+                    {typecast, fun to_filename/1}]}],
+     fun(A, B, C) -> main(fun fold_cmd/3, A, B, C) end
+
+fold_usage() ->
+    ["AAE fold operations, dumping results in JSON format to a file specified with '-o'.\n\n",
+     "List buckets:\n\n",
+     "  riak tictacaae fold list-buckets NVAL\n\n",
+     "Find keys matching filters:\n\n",
+     "  riak tictacaae fold find-keys BUCKET KEY_RANGE MODIFIED_RANGE\n",
+     "                                sibling_count=COUNT|object_size=BYTES\n\n",
+     "where BUCKET is BUCKETNAME|TYPENAME/BUCKETNAME,\n",
+     "KEY_RANGE is all|FROM,TO, MODIFIED_RANGE is all|FROM,TO (in RFC3339 format).\n\n",
+     "Count keys matching filters:\n\n",
+     "  riak tictacaae fold find-keys BUCKET KEY_RANGE MODIFIED_RANGE\n",
+     "                                sibling_count=COUNT|object_size=BYTES\n",
+     "Same as above, only return the count of keys.\n\n",
+     "Find/count tombstones in the range that match the criteria:\n\n",
+     "  riak tictacaae fold find|count-tombstones KEY_RANGE SEGMENTS MODIFIED_RANGE\n\n",
+     "where KEY_RANGE and MODIFIED_RANGE are as above, and SEGMENTS is\n",
+     "all|S1,S2,...;TREE_SIZE and TREE_SIZE is xxsmall|xsmall|small|medium|large|xlarge.\n\n",
+     "Reap tombstones in the range that match the criteria:\n\n",
+     "  riak tictacaae fold reap-tombstones KEY_RANGE SEGMENTS MODIFIED_RANGE CHANGE_METHOD\n\n",
+     "where KEY_RANGE, MODIFIED_RANGE and SEGMENTS are as above and CHANGE_METHOD is\n",
+     "jobs=N|local|count.\n\n",
+     "Collect object stats in the specified ranges:\n\n",
+     "  riak tictacaae fold object-stats BUCKET KEY_RANGE MODIFIED_RANGE\n\n",
+     "Returns the following:\n",
+     "  - the total count of objects in the key range;\n",
+     "  - the accumulated total size of all objects in the range;\n",
+     "  - a list [{Magnitude, ObjectCount}] tuples where Magnitude represents\n",
+     "    the order of magnitude of the size of the object.\n\n",
+     "Erase keys matching filters:\n\n",
+     "  riak tictacaae fold erase-keys BUCKET KEY_RANGE SEGMENTS MODIFIED_RANGE CHANGE_METHOD\n\n",
+     "BUCKET, KEY_RANGE and MODIFIED_RANGE are as above.\n\n",
+     "Repair keys matching filters:\n\n",
+     "  riak tictacaae fold repair-keys BUCKET KEY_RANGE MODIFIED_RANGE\n",
+     "BUCKET, KEY_RANGE and MODIFIED_RANGE are as above.\n"
     ].
 
-tictacaae_cmd_usage() ->
-    %% getopt:usage/3 will print to stderr, so:
-    io:format(
-"Usage:
-    AAE fold operations, dumping results in JSON format to a file specified with '-o'.
 
-    List buckets:
-
-        riak tictacaae fold list-buckets NVAL
-
-    Find keys matching filters:
-
-        riak tictacaae fold find-keys BUCKET KEY_RANGE MODIFIED_RANGE
-                                      sibling_count=COUNT|object_size=BYTES
-
-        where BUCKET is BUCKETNAME|TYPENAME/BUCKETNAME,
-        KEY_RANGE is all|FROM,TO, MODIFIED_RANGE is all|FROM,TO (in RFC3339 format).
-
-    Count keys matching filters:
-
-        riak tictacaae fold find-keys BUCKET KEY_RANGE MODIFIED_RANGE
-                                      sibling_count=COUNT|object_size=BYTES
-
-        Same as above, only return the count of keys.
-
-    Find/count tombstones in the range that match the criteria:
-
-        riak tictacaae fold find|count-tombstones KEY_RANGE SEGMENTS MODIFIED_RANGE
-
-        where KEY_RANGE and MODIFIED_RANGE are as above, and SEGMENTS is
-        all|S1,S2,...;TREE_SIZE and TREE_SIZE is xxsmall|xsmall|small|medium|large|xlarge.
-
-    Reap tombstones in the range that match the criteria:
-
-        riak tictacaae fold reap-tombstones KEY_RANGE SEGMENTS MODIFIED_RANGE CHANGE_METHOD
-
-        where KEY_RANGE, MODIFIED_RANGE and SEGMENTS are as above and CHANGE_METHOD is
-        jobs=N|local|count.
-
-    Collect object stats in the specified ranges:
-
-        riak tictacaae fold object-stats BUCKET KEY_RANGE MODIFIED_RANGE
-
-        Returns the following:
-          - the total count of objects in the key range;
-          - the accumulated total size of all objects in the range;
-          - a list [{Magnitude, ObjectCount}] tuples where Magnitude represents
-            the order of magnitude of the size of the object.
-
-    Erase keys matching filters:
-
-        riak tictacaae fold erase-keys BUCKET KEY_RANGE SEGMENTS MODIFIED_RANGE CHANGE_METHOD
-
-        BUCKET, KEY_RANGE and MODIFIED_RANGE are as above.
-
-    Repair keys matching filters:
-
-        riak tictacaae fold repair-keys BUCKET KEY_RANGE MODIFIED_RANGE
-
-        BUCKET, KEY_RANGE and MODIFIED_RANGE are as above.
-").
-
-
-print_aae_progress_report("json", Report, _) ->
-    io:format("~s\n", [mochijson2:encode(Report)]);
-
-print_aae_progress_report("table", Report, Options) ->
-    ShowValue = extract_show(Options),
-    Show = [list_to_atom(A) || A <- ShowValue],
-    io:format("~52s  ~10s  ~21s  ~20s  ~15s  ~16s\n", ["Partition ID", "Status", "Last Rebuild Date", "Next Rebuild Date", "Controller PID", "Key Store Status"]),
-    io:format("~52s  ~10s  ~21s  ~20s  ~15s  ~16s\n", ["----------------------------------------------------", "----------", "---------------------", "---------------------", "----------------", "----------------"]),
-    [begin
-         Idx = proplists:get_value(partition, M),
-         LastRebuild = proplists:get_value(last_rebuild, M),
-         NextRebuild = proplists:get_value(next_rebuild, M),
-         ControllerPid = proplists:get_value(controller_pid, M),
-         Status = proplists:get_value(status, M),
-         KeyStoreCurrentStatus = proplists:get_value(key_store_current_status, M),
-         case lists:member(Status, Show) of
-             true ->
-                 io:format("~52b  ~10s  ~21s  ~20s  ~15s  ~16s\n",
-                           [Idx, Status, LastRebuild, NextRebuild, ControllerPid, KeyStoreCurrentStatus]);
-             false ->
-                 skip
-         end
-     end || M <- Report],
-    ok.
-
-tictacaae_cmd3(Item, {Options, Args}) ->
+fold_cmd([_, _, Item], Args, Options) ->
     DumpF =
         fun(Op, Fun) ->
                 Outfile_ =
