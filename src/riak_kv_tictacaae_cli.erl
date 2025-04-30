@@ -51,7 +51,7 @@ register_all_usage() ->
 
 register_all_commands() ->
     lists:foreach(
-      fun clique:register_command/1,
+      fun(Args) -> apply(clique, register_command, Args) end,
       [rebuild_schedule_specs(),
        storeheads_specs(),
        tokenbucket_specs(),
@@ -77,11 +77,12 @@ main(Fun, A, B, C) ->
                 error:_e:_st ->
                     io:format("~p / ~p\n\n", [_e, _st]),
                     clique_status:usage();
-                throw:_ ->
-                    clique_status:usage()
+                throw:inconsistent_options ->
+                    [clique_status_alert("With multiple nodes, only -p=all is acceptable"),
+                     clique_status:usage()]
             end;
         _ ->
-            clique_status:alert("tictacaae not active\n")
+            [clique_status_alert("tictacaae not active")]
     end.
 
 main_usage() ->
@@ -130,10 +131,9 @@ rebuild_schedule_cmd([_, _, _ | Args], [], Options) ->
                       ({error, Reason}) ->
                            io_lib:format("(error: ~p)", [Reason])
                    end,
-            clique_status:table(
-              [[{node, N}, {index, P}, {rebuild_schedule, FmtF(Res)}]
-               || {Res, {P, N}} <- get_rebuild_schedule(Nodes, Partitions)]),
-            ok;
+            [clique_status:table(
+               [[{node, N}, {index, P}, {rebuild_schedule, FmtF(Res)}]
+                || {Res, {P, N}} <- get_rebuild_schedule(Nodes, Partitions)])];
         _ ->
             clique_status:usage()
     end.
@@ -167,10 +167,9 @@ storeheads_cmd([_, _, _ | Args], [], Options) ->
                       ({error, Reason}) ->
                            io_lib:format("(error: ~p)", [Reason])
                    end,
-            clique_status:table(
-              [[{node, N}, {index, P}, {storeheads, FmtF(Res)}]
-               || {Res, {P, N}} <- get_storeheads(Nodes, Partitions)]),
-            ok;
+            [clique_status:table(
+               [[{node, N}, {index, P}, {storeheads, FmtF(Res)}]
+                || {Res, {P, N}} <- get_storeheads(Nodes, Partitions)])];
         _ ->
             clique_status:usage()
     end.
@@ -204,10 +203,9 @@ tokenbucket_cmd([_, _, _ | Args], [], Options) ->
                       ({error, Reason}) ->
                            io_lib:format("(error: ~p)", [Reason])
                    end,
-            clique_status:table(
-              [[{node, N}, {index, P}, {tokenbucket, FmtF(Res)}]
-               || {Res, {P, N}} <- get_tokenbucket(Nodes, Partitions)]),
-            ok;
+            [clique_status:table(
+               [[{node, N}, {index, P}, {tokenbucket, FmtF(Res)}]
+                || {Res, {P, N}} <- get_tokenbucket(Nodes, Partitions)])];
         _ ->
             clique_status:usage()
     end.
@@ -277,16 +275,16 @@ simple_envvar_cmd([_, _, Var | Args], [], Options) ->
     end.
 
 print_tictacaae_envvar(A, Nodes) ->
-    clique_status:table(
-      [begin
-           {ok, Current} = rpc:call(Node, application, get_env, [riak_kv, A]),
-           [{node, Node}, {A, Current}]
-       end || Node <- Nodes]).
+    [clique_status:table(
+       [begin
+            {ok, Current} = rpc:call(Node, application, get_env, [riak_kv, A]),
+            [{node, Node}, {A, Current}]
+        end || Node <- Nodes])].
 
 set_tictacaae_envvar(A, Nodes, V) ->
     [ok = rpc:call(Node, application, set_env, [riak_kv, A, V])
      || Node <- Nodes],
-    ok.
+    [].
 
 
 rebuildtreeworkers_specs() ->
@@ -351,16 +349,16 @@ pool_size_cmd([_, _, Var | Args], [], Options) ->
     end.
 
 print_pool_size(Pool, Nodes) ->
-    clique_status:table(
-      [begin
-           Res = rpc:call(Node, riak_core_node_worker_pool, get_worker_pool_size, [Pool]),
-           [{node, Node}, {Pool, Res}]
-       end || Node <- Nodes]).
+    [clique_status:table(
+       [begin
+            Res = rpc:call(Node, riak_core_node_worker_pool, get_worker_pool_size, [Pool]),
+            [{node, Node}, {Pool, Res}]
+        end || Node <- Nodes])].
 
 set_worker_pool_size(Pool, Nodes, Val) ->
     [ok = rpc:call(Node, riak_core_node_worker_pool, set_worker_pool_size, [Pool, Val])
      || Node <- Nodes],
-    ok.
+    [].
 
 
 rebuild_soon_specs() ->
@@ -382,13 +380,13 @@ rebuild_soon_cmd([_, _, Arg], [], Options) ->
     AffectedVNodes = schedule_nextrebuild(
                        Nodes, Partitions, list_to_integer(Arg)),
     if length(Nodes) == 1 ->
-            clique_status_text(
-              "scheduled rebuild of aae trees on ~b partition~s on ~s\n",
-              [length(AffectedVNodes), ending(AffectedVNodes), hd(Nodes)]);
+            [clique_status_text(
+               "scheduled rebuild of aae trees on ~b partition~s on ~s\n",
+               [length(AffectedVNodes), ending(AffectedVNodes), hd(Nodes)])];
        el/=se ->
-            clique_status_text(
-              "scheduled rebuild of aae trees on ~b nodes\n",
-              [length(Nodes)])
+            [clique_status_text(
+               "scheduled rebuild of aae trees on ~b nodes\n",
+               [length(Nodes)])]
     end.
 
 
@@ -410,35 +408,35 @@ rebuild_now_cmd([_, _], [], Options) ->
     AffectedVNodes = schedule_nextrebuild(Nodes, Partitions, 0),
     send_rebuildpoke(Nodes, Partitions),
     if length(Nodes) == 1 ->
-            clique_status_text(
-              "rebuilding aae trees on ~b partition~s on ~s\n",
-              [length(AffectedVNodes), ending(AffectedVNodes), hd(Nodes)]);
+            [clique_status_text(
+               "rebuilding aae trees on ~b partition~s on ~s\n",
+               [length(AffectedVNodes), ending(AffectedVNodes), hd(Nodes)])];
        el/=se ->
-            clique_status_text(
-              "rebuilding aae trees on ~b nodes\n",
-              [length(Nodes)])
+            [clique_status_text(
+               "rebuilding aae trees on ~b nodes\n",
+               [length(Nodes)])]
     end.
 
 post_set_fun(Res, Par, Val) ->
     case Res of
         [{ok, {P, N}}] ->
-            clique_status_text(
-              "Set ~s to ~s on partition ~b on ~s\n", [Par, Val, P, N]);
+            [clique_status_text(
+               "Set ~s to ~s on partition ~b on ~s\n", [Par, Val, P, N])];
         [{ok, N}] ->
-            clique_status_text(
-              "Set ~s to ~s on ~s\n", [Par, Val, N]);
+            [clique_status_text(
+               "Set ~s to ~s on ~s\n", [Par, Val, N])];
         Multiple ->
             case length([PN || {Resx, PN} <- Multiple, Resx == ok]) of
                 AllSucceeded when AllSucceeded == length(Multiple) ->
-                    clique_status_text("Set ~s to ~s on ~b (v)nodes\n",
-                                       [Par, Val, length(Multiple)]);
+                    [clique_status_text("Set ~s to ~s on ~b (v)nodes\n",
+                                        [Par, Val, length(Multiple)])];
                 SomeSucceeded when SomeSucceeded > 0 ->
-                    clique_status_text("Successfully set ~s to ~p on ~b (v)vnodes, but"
-                                       " failed on ~b (v)nodes\n",
-                                       [Par, Val, SomeSucceeded, length(Multiple) - SomeSucceeded]);
+                    [clique_status_text("Successfully set ~s to ~p on ~b (v)vnodes, but"
+                                        " failed on ~b (v)nodes\n",
+                                        [Par, Val, SomeSucceeded, length(Multiple) - SomeSucceeded])];
                 _ ->
-                    clique_status_alert("Failed to set ~s to ~p on all ~b (v)nodes\n",
-                                        [Par, Val, length(Multiple)])
+                    [clique_status_alert("Failed to set ~s to ~p on all ~b (v)nodes\n",
+                                         [Par, Val, length(Multiple)])]
             end
     end.
 
@@ -465,7 +463,6 @@ to_partition(A) ->
 ensure_options_consistent(_, all) -> ok;
 ensure_options_consistent(NN, Specific) when length(NN) > 1,
                                              Specific /= all ->
-    clique_status_alert("With multiple nodes, only -p=all is acceptable\n", []),
     throw(inconsistent_options);
 ensure_options_consistent(_, _) -> ok.
 
@@ -692,13 +689,13 @@ fold_cmd([_, _, Item], Args, Options) ->
                   fun() ->
                           case file:open(Outfile, [write]) of
                               {ok, FD} ->
-                                  clique_status_text(
-                                    "Results will be written to ~s\n", [Outfile]),
                                   Fun(FD),
-                                  file:close(FD);
+                                  file:close(FD),
+                                  [clique_status_text(
+                                     "Results written to ~s\n", [Outfile])];
                               {error, Reason} ->
-                                  clique_status_alert(
-                                    "Failed to open \"~p\" for writing: ~p\n", [Outfile, Reason])
+                                  [clique_status_alert(
+                                     "Failed to open \"~p\" for writing: ~p\n", [Outfile, Reason])]
                           end
                   end),
                 ok
@@ -967,5 +964,7 @@ ending(_) -> "s".
 
 clique_status_text(F, A) ->
     clique_status:text(io_lib:format(F, A)).
+clique_status_alert(S) ->
+    clique_status_alert(S, []).
 clique_status_alert(F, A) ->
-    clique_status:alert(io_lib:format(F, A)).
+    clique_status:alert([clique_status_text(F, A)]).

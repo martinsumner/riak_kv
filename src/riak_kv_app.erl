@@ -257,7 +257,6 @@ start(_Type, _StartArgs) ->
 
             ok = riak_api_pb_service:register(?SERVICES),
 
-            ok = riak_kv_cli_registry:load_schema(),
             ok = riak_kv_cli_registry:register_cli(),
 
             %% Add routes to webmachine
