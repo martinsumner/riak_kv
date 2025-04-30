@@ -307,7 +307,7 @@ aaefoldworkers_specs() ->
      fun(A, B, C) -> main(fun pool_size_cmd/3, A, B, C) end
     ].
 
-poolsize_usage() ->
+pool_size_usage() ->
     ["Set/show node worker pool sizes on NODE:\n\n",
      "  riak admin tictacaae POOL [-n NODE] [VAL]\n\n",
      "POOL is one of rebuildtreeworkers, rebuildstoreworkers, aaefoldworkers.\n"
@@ -357,8 +357,8 @@ print_pool_size(Pool, Nodes) ->
            [{node, Node}, {Pool, Res}]
        end || Node <- Nodes]).
 
-set_pool_size(Pool, Nodes, Val) ->
-    [ok = rpc:call(N, riak_core_node_worker_pool, set_worker_pool_size, [Pool, Val])
+set_worker_pool_size(Pool, Nodes, Val) ->
+    [ok = rpc:call(Node, riak_core_node_worker_pool, set_worker_pool_size, [Pool, Val])
      || Node <- Nodes],
     ok.
 
@@ -380,7 +380,7 @@ rebuild_soon_cmd([_, _, Arg], [], Options) ->
     Partitions = extract_partitions(Options),
     ok = ensure_options_consistent(Nodes, Partitions),
     AffectedVNodes = schedule_nextrebuild(
-                       Nodes, Partitions, list_to_integer(Arg1)),
+                       Nodes, Partitions, list_to_integer(Arg)),
     if length(Nodes) == 1 ->
             clique_status_text(
               "scheduled rebuild of aae trees on ~b partition~s on ~s\n",
@@ -422,11 +422,11 @@ rebuild_now_cmd([_, _], [], Options) ->
 post_set_fun(Res, Par, Val) ->
     case Res of
         [{ok, {P, N}}] ->
-            clique_status:text(
-              ff("Set ~s to ~s on partition ~b on ~s\n", [Par, Val, P, N]));
+            clique_status_text(
+              "Set ~s to ~s on partition ~b on ~s\n", [Par, Val, P, N]);
         [{ok, N}] ->
-            clique_status:text(
-              ff("Set ~s to ~s on ~s\n", [Par, Val, N]));
+            clique_status_text(
+              "Set ~s to ~s on ~s\n", [Par, Val, N]);
         Multiple ->
             case length([PN || {Resx, PN} <- Multiple, Resx == ok]) of
                 AllSucceeded when AllSucceeded == length(Multiple) ->
@@ -455,9 +455,9 @@ extract_partitions(Options) ->
 
 to_partition("all") ->
     all;
-to_partition(Str) ->
+to_partition(A) ->
     try
-        list_to_integer(P)
+        list_to_integer(A)
     catch _:_ ->
             {error, bad_partition}
     end.
@@ -467,7 +467,7 @@ ensure_options_consistent(NN, Specific) when length(NN) > 1,
                                              Specific /= all ->
     clique_status_alert("With multiple nodes, only -p=all is acceptable\n", []),
     throw(inconsistent_options);
-tictacaae_cmd_ensure_options_consistent(_, _) -> ok.
+ensure_options_consistent(_, _) -> ok.
 
 schedule_nextrebuild(NN, PP, Delay) ->
     exec_command_on_vnodes(NN, PP, {aae_schedule_nextrebuild, [Delay]}).
@@ -509,8 +509,7 @@ list_to_boolean("off") -> false.
 
 treestatus_specs() ->
     [["riak-admin", "tictacaae", "treestatus"],
-     [], [{show, [{shortname, "s"}, {longname, "show"}, {typecast, fun to_show_state/1}]},
-          {format, [{shortname, "f"}, {longname, "format"}, {typecast, fun to_format/1}]}],
+     [], [{show, [{shortname, "s"}, {longname, "show"}, {typecast, fun to_show_state/1}]}],
      fun(A, B, C) -> main(fun treestatus_cmd/3, A, B, C) end
     ].
 
@@ -587,7 +586,7 @@ produce_aae_progress_report() ->
      end || {Idx, VNState} <- VVSS].
 
 print_aae_progress_report(Report, Options) ->
-    ShowValue = extract_show(Options),
+    ShowValue = to_show_state(Options),
     Show = [list_to_atom(A) || A <- ShowValue],
     Rows = [begin
                 Idx = proplists:get_value(partition, M),
@@ -611,16 +610,28 @@ print_aae_progress_report(Report, Options) ->
     clique_status:table(Rows),
     ok.
 
+to_show_state(Options) ->
+    PP = string:split(lists:flatten(lists:join(",", [P || {show, P} <- Options])), ",", all),
+    case lists:member("all", PP) of
+        true ->
+            ["unbuilt", "rebuilding", "building", "built"];
+        false ->
+            PP
+    end.
 
 
 -define(DEFAULT_AAEFOLD_OUTFILE, "aaefold-%o-results-%t.json").
 
 fold_specs() ->
     [["riak-admin", "tictacaae", "fold"],
-     [], [{output, [{shortname, "o"},
-                    {longname, "outfile"},
-                    {typecast, fun to_filename/1}]}],
+     '_', [{output, [{shortname, "o"},
+                     {longname, "outfile"},
+                     {typecast, fun to_filename/1}]}],
      fun(A, B, C) -> main(fun fold_cmd/3, A, B, C) end
+    ].
+
+to_filename(A) ->
+    A.
 
 fold_usage() ->
     ["AAE fold operations, dumping results in JSON format to a file specified with '-o'.\n\n",
@@ -681,11 +692,13 @@ fold_cmd([_, _, Item], Args, Options) ->
                   fun() ->
                           case file:open(Outfile, [write]) of
                               {ok, FD} ->
-                                  io:format("Results will be written to ~s\n", [Outfile]),
+                                  clique_status_text(
+                                    "Results will be written to ~s\n", [Outfile]),
                                   Fun(FD),
                                   file:close(FD);
                               {error, Reason} ->
-                                  io:format("Failed to open \"~p\" for writing: ~p\n", [Outfile, Reason])
+                                  clique_status_alert(
+                                    "Failed to open \"~p\" for writing: ~p\n", [Outfile, Reason])
                           end
                   end),
                 ok
@@ -843,51 +856,64 @@ fold_cmd([_, _, Item], Args, Options) ->
               end);
 
         _ ->
-            tictacaae_cmd_usage()
+            fold_usage()
     end.
 
-fold_query_spec(bucket, A) ->
-    case string:split(A, "/") of
-        [BT, B] ->
-            case lists:last(BT) of
-                $\\ ->
-                    bin_from_maybe_hex(A);
+fold_query_spec(bucket, Args) ->
+    case proplists:get_value("bucket", Args) of
+        A when is_list(A) ->
+            case string:split(A, "/") of
+                [BT, B] ->
+                    case lists:last(BT) of
+                        $\\ ->
+                            bin_from_maybe_hex(A);
+                        _ ->
+                            {bin_from_maybe_hex(BT), bin_from_maybe_hex(B)}
+                    end;
                 _ ->
-                    {bin_from_maybe_hex(BT), bin_from_maybe_hex(B)}
-            end;
-        _ ->
-            bin_from_maybe_hex(A)
+                    bin_from_maybe_hex(A)
+            end
     end;
-fold_query_spec(key_range, "all") -> all;
-fold_query_spec(key_range, A) ->
-    [From, To] = string:split(A, ","),
-    {bin_from_maybe_hex(From), bin_from_maybe_hex(To)};
-fold_query_spec(modified_range, "all") -> all;
-fold_query_spec(modified_range, A) ->
-    [From, To] = string:split(A, ","),
-    {date, calendar:rfc3339_to_system_time(From),
-     calendar:rfc3339_to_system_time(To)};
-fold_query_spec(segments, "all") -> all;
-fold_query_spec(segments, A) ->
-    [SegmentFilter_, TreeSize_] = string:split(A, ";"),
-    SegmentFilter = [ensure_valid_range(S, 0, infinity)
-                     || S <- string:split(SegmentFilter_, ",", all)],
-    TreeSize = tree_size(TreeSize_),
-    {segments, SegmentFilter, TreeSize};
-fold_query_spec(sibling_count_or_object_size, A) ->
-    case string:split(A, "=") of
-        ["sibling_count", V] ->
-            {sibling_count, ensure_valid_range(V, 0, infinity)};
-        ["object_size", V] ->
-            {object_size, ensure_valid_range(V, 0, infinity)}
+fold_query_spec(key_range, Args) ->
+    case proplists:get_value("key_range", Args) of
+        "all" -> all;
+        A when is_list(A) ->
+            [From, To] = string:split(A, ","),
+            {bin_from_maybe_hex(From), bin_from_maybe_hex(To)}
     end;
-fold_query_spec(change_method, A) ->
-    case string:split(A, "=") of
-        ["jobs", V] ->
+fold_query_spec(modified_range, Args) ->
+    case proplists:get_value("modified_range", Args) of
+        "all" -> all;
+        A when is_list(A) ->
+            [From, To] = string:split(A, ","),
+            {date, calendar:rfc3339_to_system_time(From),
+             calendar:rfc3339_to_system_time(To)}
+    end;
+fold_query_spec(segments, Args) ->
+    case proplists:get_value("segments", Args) of
+        "all" -> all;
+        A when is_list(A) ->
+            [SegmentFilter_, TreeSize_] = string:split(A, ";"),
+            SegmentFilter = [ensure_valid_range(S, 0, infinity)
+                             || S <- string:split(SegmentFilter_, ",", all)],
+            TreeSize = tree_size(TreeSize_),
+            {segments, SegmentFilter, TreeSize}
+    end;
+fold_query_spec(sibling_count_or_object_size, Args) ->
+    case {proplists:get_value("sibling_count", Args),
+          proplists:get_value("object_size", Args)} of
+        {A, _} when is_list(A) ->
+            {sibling_count, ensure_valid_range(A, 0, infinity)};
+        {_, A} when is_list(A) ->
+            {object_size, ensure_valid_range(A, 0, infinity)}
+    end;
+fold_query_spec(change_method, Args) ->
+    case proplists:get_value("change_method", Args) of
+        "jobs:" ++ V ->
             {jobs, ensure_valid_range(V, 1, infinity)};
-        ["local"] ->
+        "local" ->
             local;
-        ["count"] ->
+        "count" ->
             count
     end.
 
@@ -935,15 +961,6 @@ time2s({{LRY, LRMo, LRD}, {LRH, LRMi, LRS}}) ->
     iolist_to_binary(
       io_lib:format("~4.10.0B-~2.10.0B-~2.10.0BT~2.10.0B:~2.10.0B:~2.10.0B",
                     [LRY, LRMo, LRD, LRH, LRMi, LRS])).
-
-to_show_state(Options) ->
-    PP = string:split(lists:flatten(lists:join(",", [P || {show, P} <- Options])), ",", all),
-    case lists:member("all", PP) of
-        true ->
-            ["unbuilt", "rebuilding", "building", "built"];
-        false ->
-            PP
-    end.
 
 ending([_]) -> "";
 ending(_) -> "s".
