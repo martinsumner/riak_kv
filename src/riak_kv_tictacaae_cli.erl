@@ -104,7 +104,7 @@ main_usage() ->
 
 rebuild_schedule_specs() ->
     [["riak-admin", "tictacaae", "rebuild-schedule"],
-     [], [?NODEOPT, ?PARTITIONOPT],
+     '_', [?NODEOPT, ?PARTITIONOPT],
      fun(A, B, C) -> main(fun rebuild_schedule_cmd/3, A, B, C) end
     ].
 
@@ -113,7 +113,7 @@ rebuild_schedule_usage() ->
      "  riak admin tictacaae rebuild_schedule [-n NODE] [-p PARTITION] [RW RD]\n"
     ].
 
-rebuild_schedule_cmd([_, _, _ | Args], [], Options) ->
+rebuild_schedule_cmd([_, _, _ | Args], _, Options) ->
     Nodes = extract_nodes(Options),
     Partitions = extract_partitions(Options),
     ok = ensure_options_consistent(Nodes, Partitions),
@@ -141,7 +141,7 @@ rebuild_schedule_cmd([_, _, _ | Args], [], Options) ->
 
 storeheads_specs() ->
     [["riak-admin", "tictacaae", "storeheads"],
-     [], [?NODEOPT, ?PARTITIONOPT],
+     '_', [?NODEOPT, ?PARTITIONOPT],
      fun(A, B, C) -> main(fun storeheads_cmd/3, A, B, C) end
     ].
 
@@ -150,7 +150,7 @@ storeheads_usage() ->
      "  riak admin tictacaae storeheads [-n NODE] [-p PARTITION] [VALUE]\n"
     ].
 
-storeheads_cmd([_, _, _ | Args], [], Options) ->
+storeheads_cmd([_, _, _ | Args], _, Options) ->
     Nodes = extract_nodes(Options),
     Partitions = extract_partitions(Options),
     ok = ensure_options_consistent(Nodes, Partitions),
@@ -177,7 +177,7 @@ storeheads_cmd([_, _, _ | Args], [], Options) ->
 
 tokenbucket_specs() ->
     [["riak-admin", "tictacaae", "tokenbucket"],
-     [], [?NODEOPT, ?PARTITIONOPT],
+     '_', [?NODEOPT, ?PARTITIONOPT],
      fun(A, B, C) -> main(fun tokenbucket_cmd/3, A, B, C) end
     ].
 
@@ -186,7 +186,7 @@ tokenbucket_usage() ->
      "  riak admin tictacaae tokenbucket [-n NODE] [-p PARTITION] [VALUE]\n"
     ].
 
-tokenbucket_cmd([_, _, _ | Args], [], Options) ->
+tokenbucket_cmd([_, _, _ | Args], _, Options) ->
     Nodes = extract_nodes(Options),
     Partitions = extract_partitions(Options),
     ok = ensure_options_consistent(Nodes, Partitions),
@@ -213,25 +213,25 @@ tokenbucket_cmd([_, _, _ | Args], [], Options) ->
 
 rebuildtick_specs() ->
     [["riak-admin", "tictacaae", "rebuildtick"],
-     [], [?NODEOPT],
+     '_', [?NODEOPT],
      fun(A, B, C) -> main(fun simple_envvar_cmd/3, A, B, C) end
     ].
 
 exchangetick_specs() ->
     [["riak-admin", "tictacaae", "exchangetick"],
-     [], [?NODEOPT],
+     '_', [?NODEOPT],
      fun(A, B, C) -> main(fun simple_envvar_cmd/3, A, B, C) end
     ].
 
 maxresults_specs() ->
     [["riak-admin", "tictacaae", "maxresults"],
-     [], [?NODEOPT],
+     '_', [?NODEOPT],
      fun(A, B, C) -> main(fun simple_envvar_cmd/3, A, B, C) end
     ].
 
 rangeboost_specs() ->
     [["riak-admin", "tictacaae", "rangeboost"],
-     [], [?NODEOPT],
+     '_', [?NODEOPT],
      fun(A, B, C) -> main(fun simple_envvar_cmd/3, A, B, C) end
     ].
 
@@ -241,7 +241,7 @@ simple_envvar_usage() ->
      "VAR is one of rebuildtick, exchangetick, maxresults, rangeboost\n"
     ].
 
-simple_envvar_cmd([_, _, Var | Args], [], Options) ->
+simple_envvar_cmd([_, _, Var | Args], _, Options) ->
     Nodes = extract_nodes(Options),
     case Args of
         [Arg1] ->
@@ -289,19 +289,19 @@ set_tictacaae_envvar(A, Nodes, V) ->
 
 rebuildtreeworkers_specs() ->
     [["riak-admin", "tictacaae", "rebuildtreeworkers"],
-     [], [?NODEOPT],
+     '_', [?NODEOPT],
      fun(A, B, C) -> main(fun pool_size_cmd/3, A, B, C) end
     ].
 
 rebuildstoreworkers_specs() ->
     [["riak-admin", "tictacaae", "rebuildstoreworkers"],
-     [], [?NODEOPT],
+     '_', [?NODEOPT],
      fun(A, B, C) -> main(fun pool_size_cmd/3, A, B, C) end
     ].
 
 aaefoldworkers_specs() ->
     [["riak-admin", "tictacaae", "aaefoldworkers"],
-     [], [?NODEOPT],
+     '_', [?NODEOPT],
      fun(A, B, C) -> main(fun pool_size_cmd/3, A, B, C) end
     ].
 
@@ -311,7 +311,7 @@ pool_size_usage() ->
      "POOL is one of rebuildtreeworkers, rebuildstoreworkers, aaefoldworkers.\n"
     ].
 
-pool_size_cmd([_, _, Var | Args], [], Options) ->
+pool_size_cmd([_, _, Var | Args], _, Options) ->
     Nodes = extract_nodes(Options),
     case Args of
         [Arg1] ->
@@ -363,7 +363,7 @@ set_worker_pool_size(Pool, Nodes, Val) ->
 
 rebuild_soon_specs() ->
     [["riak-admin", "tictacaae", "rebuild-soon"],
-     [], [?NODEOPT, ?PARTITIONOPT],
+     '_', [?NODEOPT, ?PARTITIONOPT],
      fun(A, B, C) -> main(fun rebuild_soon_cmd/3, A, B, C) end
     ].
 
@@ -373,7 +373,7 @@ rebuild_soon_usage() ->
      "  riak admin tictacaae rebuild-soon [-n NODE] [-p PARTITION] DELAY\n"
     ].
 
-rebuild_soon_cmd([_, _, Arg], [], Options) ->
+rebuild_soon_cmd([_, _, _, Arg], _, Options) ->
     Nodes = extract_nodes(Options),
     Partitions = extract_partitions(Options),
     ok = ensure_options_consistent(Nodes, Partitions),
@@ -401,7 +401,7 @@ rebuild_now_usage() ->
      "  riak admin tictacaae rebuild-now [-n NODE] [-p PARTITION] DELAY\n"
     ].
 
-rebuild_now_cmd([_, _], [], Options) ->
+rebuild_now_cmd([_, _, _], _, Options) ->
     Nodes = extract_nodes(Options),
     Partitions = extract_partitions(Options),
     ok = ensure_options_consistent(Nodes, Partitions),
@@ -518,7 +518,7 @@ treestatus_usage() ->
      "'unbuilt,rebuilding,building'.\n"
     ].
 
-treestatus_cmd([_, _, _], [], Options) ->
+treestatus_cmd([_, _, _], _, Options) ->
     Report = produce_aae_progress_report(),
     print_aae_progress_report(Report, Options).
 
@@ -583,8 +583,18 @@ produce_aae_progress_report() ->
      end || {Idx, VNState} <- VVSS].
 
 print_aae_progress_report(Report, Options) ->
-    ShowValue = to_show_state(Options),
-    Show = [list_to_atom(A) || A <- ShowValue],
+    Show_ =
+        case proplists:get_all_values(show, Options) of
+            [] -> ["unbuilt","rebuilding","building"];
+            Some ->
+                case lists:member("all", Some) of
+                    true ->
+                        ["unbuilt", "rebuilding", "building", "built"];
+                    false ->
+                        Some
+                end
+        end,
+    Show = [list_to_atom(A) || A <- Show_],
     Rows = [begin
                 Idx = proplists:get_value(partition, M),
                 LastRebuild = proplists:get_value(last_rebuild, M),
@@ -604,17 +614,10 @@ print_aae_progress_report(Report, Options) ->
                         []
                 end
             end || M <- Report],
-    clique_status:table(Rows),
-    ok.
+    [clique_status:table(Rows)].
 
-to_show_state(Options) ->
-    PP = string:split(lists:flatten(lists:join(",", [P || {show, P} <- Options])), ",", all),
-    case lists:member("all", PP) of
-        true ->
-            ["unbuilt", "rebuilding", "building", "built"];
-        false ->
-            PP
-    end.
+to_show_state(A) ->
+    A.
 
 
 -define(DEFAULT_AAEFOLD_OUTFILE, "aaefold-%o-results-%t.json").
@@ -633,41 +636,41 @@ to_filename(A) ->
 fold_usage() ->
     ["AAE fold operations, dumping results in JSON format to a file specified with '-o'.\n\n",
      "List buckets:\n\n",
-     "  riak tictacaae fold list-buckets NVAL\n\n",
+     "  riak-admin tictacaae fold list-buckets NVAL\n\n",
      "Find keys matching filters:\n\n",
-     "  riak tictacaae fold find-keys BUCKET KEY_RANGE MODIFIED_RANGE\n",
-     "                                sibling_count=COUNT|object_size=BYTES\n\n",
+     "  riak-admin tictacaae fold find-keys BUCKET KEY_RANGE MODIFIED_RANGE\n",
+     "                                      sibling_count=COUNT|object_size=BYTES\n\n",
      "where BUCKET is BUCKETNAME|TYPENAME/BUCKETNAME,\n",
      "KEY_RANGE is all|FROM,TO, MODIFIED_RANGE is all|FROM,TO (in RFC3339 format).\n\n",
      "Count keys matching filters:\n\n",
-     "  riak tictacaae fold find-keys BUCKET KEY_RANGE MODIFIED_RANGE\n",
-     "                                sibling_count=COUNT|object_size=BYTES\n",
+     "  riak-admin tictacaae fold find-keys BUCKET KEY_RANGE MODIFIED_RANGE\n",
+     "                                      sibling_count=COUNT|object_size=BYTES\n",
      "Same as above, only return the count of keys.\n\n",
      "Find/count tombstones in the range that match the criteria:\n\n",
-     "  riak tictacaae fold find|count-tombstones KEY_RANGE SEGMENTS MODIFIED_RANGE\n\n",
+     "  riak-admin tictacaae fold find|count-tombstones KEY_RANGE SEGMENTS MODIFIED_RANGE\n\n",
      "where KEY_RANGE and MODIFIED_RANGE are as above, and SEGMENTS is\n",
      "all|S1,S2,...;TREE_SIZE and TREE_SIZE is xxsmall|xsmall|small|medium|large|xlarge.\n\n",
      "Reap tombstones in the range that match the criteria:\n\n",
-     "  riak tictacaae fold reap-tombstones KEY_RANGE SEGMENTS MODIFIED_RANGE CHANGE_METHOD\n\n",
+     "  riak-admin tictacaae fold reap-tombstones KEY_RANGE SEGMENTS MODIFIED_RANGE CHANGE_METHOD\n\n",
      "where KEY_RANGE, MODIFIED_RANGE and SEGMENTS are as above and CHANGE_METHOD is\n",
      "jobs=N|local|count.\n\n",
      "Collect object stats in the specified ranges:\n\n",
-     "  riak tictacaae fold object-stats BUCKET KEY_RANGE MODIFIED_RANGE\n\n",
+     "  riak-admin tictacaae fold object-stats BUCKET KEY_RANGE MODIFIED_RANGE\n\n",
      "Returns the following:\n",
      "  - the total count of objects in the key range;\n",
      "  - the accumulated total size of all objects in the range;\n",
      "  - a list [{Magnitude, ObjectCount}] tuples where Magnitude represents\n",
      "    the order of magnitude of the size of the object.\n\n",
      "Erase keys matching filters:\n\n",
-     "  riak tictacaae fold erase-keys BUCKET KEY_RANGE SEGMENTS MODIFIED_RANGE CHANGE_METHOD\n\n",
+     "  riak-admin tictacaae fold erase-keys BUCKET KEY_RANGE SEGMENTS MODIFIED_RANGE CHANGE_METHOD\n\n",
      "BUCKET, KEY_RANGE and MODIFIED_RANGE are as above.\n\n",
      "Repair keys matching filters:\n\n",
-     "  riak tictacaae fold repair-keys BUCKET KEY_RANGE MODIFIED_RANGE\n",
+     "  riak-admin tictacaae fold repair-keys BUCKET KEY_RANGE MODIFIED_RANGE\n",
      "BUCKET, KEY_RANGE and MODIFIED_RANGE are as above.\n"
     ].
 
 
-fold_cmd([_, _, Item], Args, Options) ->
+fold_cmd([_, _, _, Item], Args, Options) ->
     DumpF =
         fun(Op, Fun) ->
                 Outfile_ =
