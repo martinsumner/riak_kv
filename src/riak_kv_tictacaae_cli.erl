@@ -34,16 +34,26 @@ register_cli() ->
 
 register_all_usage() ->
     clique:register_usage(["riak-admin", "tictacaae"], main_usage()),
-    clique:register_usage(["riak-admin", "tictacaae", "rebuild_schedule"], rebuild_schedule_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "rebuild-schedule"], rebuild_schedule_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "rebuild-schedule", '*', '*'], rebuild_schedule_usage()),
     clique:register_usage(["riak-admin", "tictacaae", "storeheads"], storeheads_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "storeheads", '*'], storeheads_usage()),
     clique:register_usage(["riak-admin", "tictacaae", "tokenbucket"], tokenbucket_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "tokenbucket", '*'], tokenbucket_usage()),
     clique:register_usage(["riak-admin", "tictacaae", "rebuildtick"], simple_envvar_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "rebuildtick", '*'], simple_envvar_usage()),
     clique:register_usage(["riak-admin", "tictacaae", "exchangetick"], simple_envvar_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "exchangetick", '*'], simple_envvar_usage()),
     clique:register_usage(["riak-admin", "tictacaae", "maxresults"], simple_envvar_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "maxresults", '*'], simple_envvar_usage()),
     clique:register_usage(["riak-admin", "tictacaae", "rangeboost"], simple_envvar_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "rangeboost", '*'], simple_envvar_usage()),
     clique:register_usage(["riak-admin", "tictacaae", "rebuildtreeworkers"], pool_size_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "rebuildtreeworkers", '*'], pool_size_usage()),
     clique:register_usage(["riak-admin", "tictacaae", "rebuildstoreworkers"], pool_size_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "rebuildstoreworkers", '*'], pool_size_usage()),
     clique:register_usage(["riak-admin", "tictacaae", "aaefoldworkers"], pool_size_usage()),
+    clique:register_usage(["riak-admin", "tictacaae", "aaefoldworkers", '*'], pool_size_usage()),
     clique:register_usage(["riak-admin", "tictacaae", "rebuild-soon"], rebuild_soon_usage()),
     clique:register_usage(["riak-admin", "tictacaae", "rebuild-now"], rebuild_now_usage()),
     clique:register_usage(["riak-admin", "tictacaae", "treestatus"], treestatus_usage()),
@@ -52,16 +62,26 @@ register_all_usage() ->
 register_all_commands() ->
     lists:foreach(
       fun(Args) -> apply(clique, register_command, Args) end,
-      [rebuild_schedule_specs(),
-       storeheads_specs(),
-       tokenbucket_specs(),
-       rebuildtick_specs(),
-       exchangetick_specs(),
-       maxresults_specs(),
-       rangeboost_specs(),
-       rebuildtreeworkers_specs(),
-       rebuildstoreworkers_specs(),
-       aaefoldworkers_specs(),
+      [get_rebuild_schedule_specs(),
+       set_rebuild_schedule_specs(),
+       get_storeheads_specs(),
+       set_storeheads_specs(),
+       get_tokenbucket_specs(),
+       set_tokenbucket_specs(),
+       get_rebuildtick_specs(),
+       set_rebuildtick_specs(),
+       get_exchangetick_specs(),
+       set_exchangetick_specs(),
+       get_maxresults_specs(),
+       set_maxresults_specs(),
+       get_rangeboost_specs(),
+       set_rangeboost_specs(),
+       get_rebuildtreeworkers_specs(),
+       set_rebuildtreeworkers_specs(),
+       get_rebuildstoreworkers_specs(),
+       set_rebuildstoreworkers_specs(),
+       get_aaefoldworkers_specs(),
+       set_aaefoldworkers_specs(),
        rebuild_soon_specs(),
        rebuild_now_specs(),
        treestatus_specs(),
@@ -86,7 +106,7 @@ main(Fun, A, B, C) ->
     end.
 
 main_usage() ->
-    ["riak-admin tictacaae { rebuild_schedule | storeheads | tokenbucket\n",
+    ["riak-admin tictacaae { rebuild-schedule | storeheads | tokenbucket\n",
      "                     | rebuildtick | exchangetick | maxresults | rangeboost\n",
      "                     | rebuildtreeworkers | rebuildstoreworkers | aaefoldworkers\n",
      "                     | rebuild-soon | rebuild-now | treestatus | fold\n",
@@ -102,20 +122,26 @@ main_usage() ->
                                    {longname, "partition"},
                                    {typecast, fun to_partition/1}]}).
 
-rebuild_schedule_specs() ->
+get_rebuild_schedule_specs() ->
     [["riak-admin", "tictacaae", "rebuild-schedule"],
+     '_', [?NODEOPT, ?PARTITIONOPT],
+     fun(A, B, C) -> main(fun rebuild_schedule_cmd/3, A, B, C) end
+    ].
+
+set_rebuild_schedule_specs() ->
+    [["riak-admin", "tictacaae", "rebuild-schedule", '*', '*'],
      '_', [?NODEOPT, ?PARTITIONOPT],
      fun(A, B, C) -> main(fun rebuild_schedule_cmd/3, A, B, C) end
     ].
 
 rebuild_schedule_usage() ->
     ["Set/show rebuild schedule on an AAE controller managing PARTITION on NODE:\n\n",
-     "  riak admin tictacaae rebuild_schedule [-n NODE] [-p PARTITION] [RW RD]\n"
+     "  riak admin tictacaae rebuild-schedule [-n NODE] [-p PARTITION] [RW RD]\n"
     ].
 
 rebuild_schedule_cmd([_, _, _ | Args], _, Options) ->
     Nodes = extract_nodes(Options),
-    Partitions = extract_partitions(Options),
+    Partitions = extract_partitions(Options, Nodes),
     ok = ensure_options_consistent(Nodes, Partitions),
     case Args of
         [Arg1, Arg2] ->
@@ -139,8 +165,14 @@ rebuild_schedule_cmd([_, _, _ | Args], _, Options) ->
     end.
 
 
-storeheads_specs() ->
+get_storeheads_specs() ->
     [["riak-admin", "tictacaae", "storeheads"],
+     '_', [?NODEOPT, ?PARTITIONOPT],
+     fun(A, B, C) -> main(fun storeheads_cmd/3, A, B, C) end
+    ].
+
+set_storeheads_specs() ->
+    [["riak-admin", "tictacaae", "storeheads", '*'],
      '_', [?NODEOPT, ?PARTITIONOPT],
      fun(A, B, C) -> main(fun storeheads_cmd/3, A, B, C) end
     ].
@@ -152,7 +184,7 @@ storeheads_usage() ->
 
 storeheads_cmd([_, _, _ | Args], _, Options) ->
     Nodes = extract_nodes(Options),
-    Partitions = extract_partitions(Options),
+    Partitions = extract_partitions(Options, Nodes),
     ok = ensure_options_consistent(Nodes, Partitions),
     case Args of
         [Arg1] ->
@@ -162,10 +194,10 @@ storeheads_cmd([_, _, _ | Args], _, Options) ->
               "storeheads",
               Val);
         [] ->
-            FmtF = fun({ok, V}) ->
-                           io_lib:format("~s", [V]);
-                      ({error, Reason}) ->
-                           io_lib:format("(error: ~p)", [Reason])
+            FmtF = fun({error, Reason}) ->
+                           io_lib:format("(error: ~p)", [Reason]);
+                      (V) ->
+                           io_lib:format("~s", [V])
                    end,
             [clique_status:table(
                [[{node, N}, {index, P}, {storeheads, FmtF(Res)}]
@@ -175,8 +207,14 @@ storeheads_cmd([_, _, _ | Args], _, Options) ->
     end.
 
 
-tokenbucket_specs() ->
+get_tokenbucket_specs() ->
     [["riak-admin", "tictacaae", "tokenbucket"],
+     '_', [?NODEOPT, ?PARTITIONOPT],
+     fun(A, B, C) -> main(fun tokenbucket_cmd/3, A, B, C) end
+    ].
+
+set_tokenbucket_specs() ->
+    [["riak-admin", "tictacaae", "tokenbucket", '*'],
      '_', [?NODEOPT, ?PARTITIONOPT],
      fun(A, B, C) -> main(fun tokenbucket_cmd/3, A, B, C) end
     ].
@@ -188,7 +226,7 @@ tokenbucket_usage() ->
 
 tokenbucket_cmd([_, _, _ | Args], _, Options) ->
     Nodes = extract_nodes(Options),
-    Partitions = extract_partitions(Options),
+    Partitions = extract_partitions(Options, Nodes),
     ok = ensure_options_consistent(Nodes, Partitions),
     case Args of
         [Arg1] ->
@@ -198,10 +236,10 @@ tokenbucket_cmd([_, _, _ | Args], _, Options) ->
               "tokenbucket",
               Val);
         [] ->
-            FmtF = fun({ok, V}) ->
-                           io_lib:format("~s", [V]);
-                      ({error, Reason}) ->
-                           io_lib:format("(error: ~p)", [Reason])
+            FmtF = fun({error, Reason}) ->
+                           io_lib:format("(error: ~p)", [Reason]);
+                      (V) ->
+                           io_lib:format("~s", [V])
                    end,
             [clique_status:table(
                [[{node, N}, {index, P}, {tokenbucket, FmtF(Res)}]
@@ -211,26 +249,46 @@ tokenbucket_cmd([_, _, _ | Args], _, Options) ->
     end.
 
 
-rebuildtick_specs() ->
+get_rebuildtick_specs() ->
     [["riak-admin", "tictacaae", "rebuildtick"],
      '_', [?NODEOPT],
      fun(A, B, C) -> main(fun simple_envvar_cmd/3, A, B, C) end
     ].
+set_rebuildtick_specs() ->
+    [["riak-admin", "tictacaae", "rebuildtick", '*'],
+     '_', [?NODEOPT],
+     fun(A, B, C) -> main(fun simple_envvar_cmd/3, A, B, C) end
+    ].
 
-exchangetick_specs() ->
+get_exchangetick_specs() ->
     [["riak-admin", "tictacaae", "exchangetick"],
      '_', [?NODEOPT],
      fun(A, B, C) -> main(fun simple_envvar_cmd/3, A, B, C) end
     ].
-
-maxresults_specs() ->
-    [["riak-admin", "tictacaae", "maxresults"],
+set_exchangetick_specs() ->
+    [["riak-admin", "tictacaae", "exchangetick", '*'],
      '_', [?NODEOPT],
      fun(A, B, C) -> main(fun simple_envvar_cmd/3, A, B, C) end
     ].
 
-rangeboost_specs() ->
+get_maxresults_specs() ->
+    [["riak-admin", "tictacaae", "maxresults"],
+     '_', [?NODEOPT],
+     fun(A, B, C) -> main(fun simple_envvar_cmd/3, A, B, C) end
+    ].
+set_maxresults_specs() ->
+    [["riak-admin", "tictacaae", "maxresults", '*'],
+     '_', [?NODEOPT],
+     fun(A, B, C) -> main(fun simple_envvar_cmd/3, A, B, C) end
+    ].
+
+get_rangeboost_specs() ->
     [["riak-admin", "tictacaae", "rangeboost"],
+     '_', [?NODEOPT],
+     fun(A, B, C) -> main(fun simple_envvar_cmd/3, A, B, C) end
+    ].
+set_rangeboost_specs() ->
+    [["riak-admin", "tictacaae", "rangeboost", '*'],
      '_', [?NODEOPT],
      fun(A, B, C) -> main(fun simple_envvar_cmd/3, A, B, C) end
     ].
@@ -287,20 +345,35 @@ set_tictacaae_envvar(A, Nodes, V) ->
     [].
 
 
-rebuildtreeworkers_specs() ->
+get_rebuildtreeworkers_specs() ->
     [["riak-admin", "tictacaae", "rebuildtreeworkers"],
      '_', [?NODEOPT],
      fun(A, B, C) -> main(fun pool_size_cmd/3, A, B, C) end
     ].
-
-rebuildstoreworkers_specs() ->
-    [["riak-admin", "tictacaae", "rebuildstoreworkers"],
+set_rebuildtreeworkers_specs() ->
+    [["riak-admin", "tictacaae", "rebuildtreeworkers", '*'],
      '_', [?NODEOPT],
      fun(A, B, C) -> main(fun pool_size_cmd/3, A, B, C) end
     ].
 
-aaefoldworkers_specs() ->
+get_rebuildstoreworkers_specs() ->
+    [["riak-admin", "tictacaae", "rebuildstoreworkers"],
+     '_', [?NODEOPT],
+     fun(A, B, C) -> main(fun pool_size_cmd/3, A, B, C) end
+    ].
+set_rebuildstoreworkers_specs() ->
+    [["riak-admin", "tictacaae", "rebuildstoreworkers", '*'],
+     '_', [?NODEOPT],
+     fun(A, B, C) -> main(fun pool_size_cmd/3, A, B, C) end
+    ].
+
+get_aaefoldworkers_specs() ->
     [["riak-admin", "tictacaae", "aaefoldworkers"],
+     '_', [?NODEOPT],
+     fun(A, B, C) -> main(fun pool_size_cmd/3, A, B, C) end
+    ].
+set_aaefoldworkers_specs() ->
+    [["riak-admin", "tictacaae", "aaefoldworkers", '*'],
      '_', [?NODEOPT],
      fun(A, B, C) -> main(fun pool_size_cmd/3, A, B, C) end
     ].
@@ -318,22 +391,19 @@ pool_size_cmd([_, _, Var | Args], _, Options) ->
             case Var of
                 "rebuildtreeworkers" ->
                     Val = ensure_valid_range(Arg1, 1, 500),
-                    post_set_fun(
-                      set_worker_pool_size(Nodes, af1_pool, Val),
-                      "rebuildtreeworkers",
-                      integer_to_list(Val));
+                    set_worker_pool_size(Nodes, af1_pool, Val),
+                    [clique_status_text(
+                       "Set ~s size to ~b on ~b node~s\n", [af1_pool, Val, length(Nodes), ending(Nodes)])];
                 "aaefoldworkers" ->
                     Val = ensure_valid_range(Arg1, 1, 500),
-                    post_set_fun(
-                      set_worker_pool_size(Nodes, af4_pool, Val),
-                      "aaefoldworkers",
-                      integer_to_list(Val));
+                    set_worker_pool_size(Nodes, af4_pool, Val),
+                    [clique_status_text(
+                       "Set ~s size to ~b on ~b node~s\n", [af4_pool, Val, length(Nodes), ending(Nodes)])];
                 "rebuildstoreworkers" ->
                     Val = ensure_valid_range(Arg1, 1, 500),
-                    post_set_fun(
-                      set_worker_pool_size(Nodes, be_pool, Val),
-                      "rebuildstoreworkers",
-                      integer_to_list(Val))
+                    set_worker_pool_size(Nodes, be_pool, Val),
+                    [clique_status_text(
+                       "Set ~s size to ~b on ~b node~s\n", [be_pool, Val, length(Nodes), ending(Nodes)])]
             end;
         [] ->
             case Var of
@@ -355,10 +425,10 @@ print_pool_size(Pool, Nodes) ->
             [{node, Node}, {Pool, Res}]
         end || Node <- Nodes])].
 
-set_worker_pool_size(Pool, Nodes, Val) ->
+set_worker_pool_size(Nodes, Pool, Val) ->
     [ok = rpc:call(Node, riak_core_node_worker_pool, set_worker_pool_size, [Pool, Val])
      || Node <- Nodes],
-    [].
+    Nodes.
 
 
 rebuild_soon_specs() ->
@@ -375,7 +445,7 @@ rebuild_soon_usage() ->
 
 rebuild_soon_cmd([_, _, _, Arg], _, Options) ->
     Nodes = extract_nodes(Options),
-    Partitions = extract_partitions(Options),
+    Partitions = extract_partitions(Options, Nodes),
     ok = ensure_options_consistent(Nodes, Partitions),
     AffectedVNodes = schedule_nextrebuild(
                        Nodes, Partitions, list_to_integer(Arg)),
@@ -403,7 +473,7 @@ rebuild_now_usage() ->
 
 rebuild_now_cmd([_, _, _], _, Options) ->
     Nodes = extract_nodes(Options),
-    Partitions = extract_partitions(Options),
+    Partitions = extract_partitions(Options, Nodes),
     ok = ensure_options_consistent(Nodes, Partitions),
     AffectedVNodes = schedule_nextrebuild(Nodes, Partitions, 0),
     send_rebuildpoke(Nodes, Partitions),
@@ -440,16 +510,26 @@ post_set_fun(Res, Par, Val) ->
             end
     end.
 
+
 extract_nodes(Options) ->
     NN = [N || {node, N} <- Options],
     case lists:member(all, NN) of
         true ->
             [node() | nodes()];
-        false ->
-            NN
+        false when NN /= [] ->
+            NN;
+        _ ->
+            [node()]
     end.
-extract_partitions(Options) ->
-    [P || {partition, P} <- Options].
+extract_partitions(Options, Nodes) ->
+    PP = [P || {partition, P} <- Options],
+    HaveAll = lists:member(all, PP) or (length(PP) == 0),
+    case HaveAll of
+        true when length(Nodes) == 1 ->
+            [I || {I, _} <- vnodes(hd(Nodes), all)];
+        false ->
+            PP
+    end.
 
 to_partition("all") ->
     all;
