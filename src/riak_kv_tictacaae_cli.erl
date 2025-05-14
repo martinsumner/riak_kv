@@ -22,11 +22,9 @@
 
 -behaviour(clique_handler).
 
--export([
-    register_cli/0
-]).
-
 -include_lib("kernel/include/logger.hrl").
+
+-export([register_cli/0]).
 
 register_cli() ->
     register_all_usage(),
@@ -94,12 +92,8 @@ main(Fun, A, B, C) ->
             try
                 Fun(A, B, C)
             catch
-                error:_e:_st ->
-                    io:format("~p / ~p\n\n", [_e, _st]),
-                    clique_status:usage();
-                throw:inconsistent_options ->
-                    [clique_status_alert("With multiple nodes, only -p=all is acceptable"),
-                     clique_status:usage()]
+                _:_ ->
+                    clique_status:usage()
             end;
         _ ->
             [clique_status_alert("tictacaae not active")]
@@ -540,10 +534,10 @@ to_partition(A) ->
             {error, bad_partition}
     end.
 
-ensure_options_consistent(_, all) -> ok;
-ensure_options_consistent(NN, Specific) when length(NN) > 1,
-                                             Specific /= all ->
-    throw(inconsistent_options);
+%% ensure_options_consistent(NN, Specific) when length(NN) > 1,
+%%                                              Specific /= all ->
+%%     io:format("With more than a single node, only -p all is allowed\n", []),
+%%     throw(inconsistent_options);
 ensure_options_consistent(_, _) -> ok.
 
 schedule_nextrebuild(NN, PP, Delay) ->
@@ -586,7 +580,7 @@ list_to_boolean("off") -> false.
 
 treestatus_specs() ->
     [["riak-admin", "tictacaae", "treestatus"],
-     [], [{show, [{shortname, "s"}, {longname, "show"}, {typecast, fun to_show_state/1}]}],
+    [], [{show, [{shortname, "s"}, {longname, "show"}, {typecast, fun to_show_state/1}]}],
      fun(A, B, C) -> main(fun treestatus_cmd/3, A, B, C) end
     ].
 
@@ -703,7 +697,7 @@ to_show_state(A) ->
 -define(DEFAULT_AAEFOLD_OUTFILE, "aaefold-%o-results-%t.json").
 
 fold_specs() ->
-    [["riak-admin", "tictacaae", "fold"],
+    [["riak-admin", "tictacaae", "fold", '*'],
      '_', [{output, [{shortname, "o"},
                      {longname, "outfile"},
                      {typecast, fun to_filename/1}]}],
@@ -716,41 +710,50 @@ to_filename(A) ->
 fold_usage() ->
     ["AAE fold operations, dumping results in JSON format to a file specified with '-o'.\n\n",
      "List buckets:\n\n",
-     "  riak-admin tictacaae fold list-buckets NVAL\n\n",
-     "Find keys matching filters:\n\n",
-     "  riak-admin tictacaae fold find-keys BUCKET KEY_RANGE MODIFIED_RANGE\n",
-     "                                      sibling_count=COUNT|object_size=BYTES\n\n",
+     "  riak-admin tictacaae fold list-buckets\n",
+     "                            nval=NVAL\n\n",
+     "Find/count keys matching filters:\n\n",
+     "  riak-admin tictacaae fold find-keys|count-keys\n",
+     "                            bucket=BUCKET key_range=KEY_RANGE\n",
+     "                            modified_range=MODIFIED_RANGE\n",
+     "                            sibling_count=COUNT|object_size=BYTES\n\n",
      "where BUCKET is BUCKETNAME|TYPENAME/BUCKETNAME,\n",
      "KEY_RANGE is all|FROM,TO, MODIFIED_RANGE is all|FROM,TO (in RFC3339 format).\n\n",
-     "Count keys matching filters:\n\n",
-     "  riak-admin tictacaae fold find-keys BUCKET KEY_RANGE MODIFIED_RANGE\n",
-     "                                      sibling_count=COUNT|object_size=BYTES\n",
-     "Same as above, only return the count of keys.\n\n",
      "Find/count tombstones in the range that match the criteria:\n\n",
-     "  riak-admin tictacaae fold find|count-tombstones KEY_RANGE SEGMENTS MODIFIED_RANGE\n\n",
+     "  riak-admin tictacaae fold find-tombstones|count-tombstones\n",
+     "                            key_range=KEY_RANGE segments=SEGMENTS\n",
+     "                            modified_range=MODIFIED_RANGE\n\n",
      "where KEY_RANGE and MODIFIED_RANGE are as above, and SEGMENTS is\n",
      "all|S1,S2,...;TREE_SIZE and TREE_SIZE is xxsmall|xsmall|small|medium|large|xlarge.\n\n",
      "Reap tombstones in the range that match the criteria:\n\n",
-     "  riak-admin tictacaae fold reap-tombstones KEY_RANGE SEGMENTS MODIFIED_RANGE CHANGE_METHOD\n\n",
+     "  riak-admin tictacaae fold reap-tombstones\n",
+     "                            key_range=KEY_RANGE segments=SEGMENTS\n",
+     "                            modified_range=MODIFIED_RANGE change_method=CHANGE_METHOD\n\n",
      "where KEY_RANGE, MODIFIED_RANGE and SEGMENTS are as above and CHANGE_METHOD is\n",
-     "jobs=N|local|count.\n\n",
+     "jobs:N|local|count.\n\n",
      "Collect object stats in the specified ranges:\n\n",
-     "  riak-admin tictacaae fold object-stats BUCKET KEY_RANGE MODIFIED_RANGE\n\n",
+     "  riak-admin tictacaae fold object-stats\n",
+     "                            bucket=BUCKET key_range=KEY_RANGE\n",
+     "                            modified_range=MODIFIED_RANGE\n\n",
      "Returns the following:\n",
      "  - the total count of objects in the key range;\n",
      "  - the accumulated total size of all objects in the range;\n",
      "  - a list [{Magnitude, ObjectCount}] tuples where Magnitude represents\n",
      "    the order of magnitude of the size of the object.\n\n",
      "Erase keys matching filters:\n\n",
-     "  riak-admin tictacaae fold erase-keys BUCKET KEY_RANGE SEGMENTS MODIFIED_RANGE CHANGE_METHOD\n\n",
+     "  riak-admin tictacaae fold erase-keys\n",
+     "                            bucket=BUCKET key_range=KEY_RANGE segments=SEGMENTS\n",
+     "                            modified_range=MODIFIED_RANGE change_method=CHANGE_METHOD\n\n",
      "BUCKET, KEY_RANGE and MODIFIED_RANGE are as above.\n\n",
      "Repair keys matching filters:\n\n",
-     "  riak-admin tictacaae fold repair-keys BUCKET KEY_RANGE MODIFIED_RANGE\n",
+     "  riak-admin tictacaae fold repair-keys\n",
+     "                            bucket=BUCKET key_range=KEY_RANGE\n",
+     "                            modified_range=MODIFIED_RANGE\n",
      "BUCKET, KEY_RANGE and MODIFIED_RANGE are as above.\n"
     ].
 
 
-fold_cmd([_, _, _, Item], Args, Options) ->
+fold_cmd([_, _, _ | Items], Keys, Options) ->
     DumpF =
         fun(Op, Fun) ->
                 Outfile_ =
@@ -772,41 +775,45 @@ fold_cmd([_, _, _, Item], Args, Options) ->
                   fun() ->
                           case file:open(Outfile, [write]) of
                               {ok, FD} ->
-                                  Fun(FD),
-                                  file:close(FD),
-                                  [clique_status_text(
-                                     "Results written to ~s\n", [Outfile])];
+                                  io:format(
+                                     "Results will be written to ~s\n", [Outfile]),
+                                  try
+                                      Fun(FD)
+                                  catch _:_ ->
+                                          ok
+                                  end,
+                                  file:close(FD);
                               {error, Reason} ->
-                                  [clique_status_alert(
-                                     "Failed to open \"~p\" for writing: ~p\n", [Outfile, Reason])]
+                                  io:format(
+                                     "Failed to open \"~p\" for writing: ~p\n", [Outfile, Reason])
                           end
                   end),
-                ok
+                []
         end,
-    case {Item, Args} of
-        {"fold", ["list-buckets", NVal]} ->
+    case Items of
+        ["list-buckets"] ->
             DumpF(
               "list-buckets",
               fun(FD) ->
                       Query =
                           {list_buckets,
-                           ensure_valid_range(NVal, 1, 999)
+                           fold_query_arg(nval, Keys)
                           },
                       {ok, BB} = riak_client:aae_fold(Query),
                       Printable = [printable_bin(B) || B <- BB],
                       io:format(FD, "~s\n", [mochijson2:encode(Printable)])
               end);
 
-        {"fold", ["find-keys", Bucket, KeyRange, ModifiedRange, FourthArg]} ->
+        ["find-keys"] ->
             DumpF(
               "find-keys",
               fun(FD) ->
                       Query =
                           {find_keys,
-                           fold_query_spec(bucket, Bucket),
-                           fold_query_spec(key_range, KeyRange),
-                           fold_query_spec(modified_range, ModifiedRange),
-                           fold_query_spec(sibling_count_or_object_size, FourthArg)
+                           fold_query_arg(bucket, Keys),
+                           fold_query_arg(key_range, Keys),
+                           fold_query_arg(modified_range, Keys),
+                           fold_query_arg(sibling_count_or_object_size, Keys)
                           },
                       {ok, KK} = riak_client:aae_fold(Query),
                       Printable = [#{<<"key">> => printable_bin(K),
@@ -815,31 +822,31 @@ fold_cmd([_, _, _, Item], Args, Options) ->
                       io:format(FD, "~s\n", [mochijson2:encode(Printable)])
               end);
 
-        {"fold", ["count-keys", Bucket, KeyRange, ModifiedRange, FourthArg]} ->
+        ["count-keys"] ->
             DumpF(
               "count-keys",
               fun(FD) ->
                       Query =
                           {find_keys,
-                           fold_query_spec(bucket, Bucket),
-                           fold_query_spec(key_range, KeyRange),
-                           fold_query_spec(modified_range, ModifiedRange),
-                           fold_query_spec(sibling_count_or_object_size, FourthArg)
+                           fold_query_arg(bucket, Keys),
+                           fold_query_arg(key_range, Keys),
+                           fold_query_arg(modified_range, Keys),
+                           fold_query_arg(sibling_count_or_object_size, Keys)
                           },
                       {ok, KK} = riak_client:aae_fold(Query),
                       io:format(FD, "~b\n", [length(KK)])
               end);
 
-        {"fold", ["find-tombstones", Bucket, KeyRange, Segments, ModifiedRange]} ->
+        ["find-tombstones"] ->
             DumpF(
               "find-tombstones",
               fun(FD) ->
                       Query =
                           {find_tombs,
-                           fold_query_spec(bucket, Bucket),
-                           fold_query_spec(key_range, KeyRange),
-                           fold_query_spec(segments, Segments),
-                           fold_query_spec(modified_range, ModifiedRange)
+                           fold_query_arg(bucket, Keys),
+                           fold_query_arg(key_range, Keys),
+                           fold_query_arg(segments, Keys),
+                           fold_query_arg(modified_range, Keys)
                           },
                       {ok, TT} = riak_client:aae_fold(Query),
                       Printable = [#{bucket => printable_bin(B),
@@ -848,46 +855,46 @@ fold_cmd([_, _, _, Item], Args, Options) ->
                       io:format(FD, "~s\n", [mochijson2:encode(Printable)])
               end);
 
-        {"fold", ["count-tombstones", Bucket, KeyRange, Segments, ModifiedRange]} ->
+        ["count-tombstones"] ->
             DumpF(
               "count-tombstones",
               fun(FD) ->
                       Query =
                           {find_tombs,
-                           fold_query_spec(bucket, Bucket),
-                           fold_query_spec(key_range, KeyRange),
-                           fold_query_spec(segments, Segments),
-                           fold_query_spec(modified_range, ModifiedRange)
+                           fold_query_arg(bucket, Keys),
+                           fold_query_arg(key_range, Keys),
+                           fold_query_arg(segments, Keys),
+                           fold_query_arg(modified_range, Keys)
                           },
                       {ok, TT} = riak_client:aae_fold(Query),
                       io:format(FD, "~b\n", [length(TT)])
               end);
 
-        {"fold", ["reap-tombstones", Bucket, KeyRange, Segments, ModifiedRange, ChangeMethod]} ->
+        ["reap-tombstones"] ->
             DumpF(
               "reap-tombstones",
               fun(FD) ->
                       Query =
                           {reap_tombs,
-                           fold_query_spec(bucket, Bucket),
-                           fold_query_spec(key_range, KeyRange),
-                           fold_query_spec(segments, Segments),
-                           fold_query_spec(modified_range, ModifiedRange),
-                           fold_query_spec(change_method, ChangeMethod)
+                           fold_query_arg(bucket, Keys),
+                           fold_query_arg(key_range, Keys),
+                           fold_query_arg(segments, Keys),
+                           fold_query_arg(modified_range, Keys),
+                           fold_query_arg(change_method, Keys)
                           },
                       {ok, TT} = riak_client:aae_fold(Query),
                       io:format(FD, "~b\n", [TT])
               end);
 
-        {"fold", ["object-stats", Bucket, KeyRange, ModifiedRange]} ->
+        ["object-stats"] ->
             DumpF(
               "object-stats",
               fun(FD) ->
                       Query =
                           {object_stats,
-                           fold_query_spec(bucket, Bucket),
-                           fold_query_spec(key_range, KeyRange),
-                           fold_query_spec(modified_range, ModifiedRange)
+                           fold_query_arg(bucket, Keys),
+                           fold_query_arg(key_range, Keys),
+                           fold_query_arg(modified_range, Keys)
                           },
                       {ok, SS} = riak_client:aae_fold(Query),
                       TC = proplists:get_value(total_count, SS),
@@ -904,31 +911,31 @@ fold_cmd([_, _, _, Item], Args, Options) ->
                                                 })])
               end);
 
-        {"fold", ["erase-keys", Bucket, KeyRange, Segments, ModifiedRange, ChangeMethod]} ->
+        ["erase-keys"] ->
             DumpF(
               "erase-keys",
               fun(FD) ->
                       Query =
                           {erase_keys,
-                           fold_query_spec(bucket, Bucket),
-                           fold_query_spec(key_range, KeyRange),
-                           fold_query_spec(segments, Segments),
-                           fold_query_spec(modified_range, ModifiedRange),
-                           fold_query_spec(change_method, ChangeMethod)
+                           fold_query_arg(bucket, Keys),
+                           fold_query_arg(key_range, Keys),
+                           fold_query_arg(segments, Keys),
+                           fold_query_arg(modified_range, Keys),
+                           fold_query_arg(change_method, Keys)
                           },
                       {ok, Res} = riak_client:aae_fold(Query),
                       io:format(FD, "~b\n", [Res])
               end);
 
-        {"fold", ["repair-keys", Bucket, KeyRange, ModifiedRange]} ->
+        ["repair-keys"] ->
             DumpF(
               "erase-keys",
               fun(FD) ->
                       Query =
                           {repair_keys_range,
-                           fold_query_spec(bucket, Bucket),
-                           fold_query_spec(key_range, KeyRange),
-                           fold_query_spec(modified_range, ModifiedRange),
+                           fold_query_arg(bucket, Keys),
+                           fold_query_arg(key_range, Keys),
+                           fold_query_arg(modified_range, Keys),
                            all
                           },
                       {ok, {_Tail, Count, all, _RBS}} = riak_client:aae_fold(Query),
@@ -936,11 +943,18 @@ fold_cmd([_, _, _, Item], Args, Options) ->
               end);
 
         _ ->
-            fold_usage()
+            clique_status:usage()
     end.
 
-fold_query_spec(bucket, Args) ->
-    case proplists:get_value("bucket", Args) of
+fold_query_arg(nval, Keys) ->
+    try
+        ensure_valid_range(proplists:get_value("nval", Keys), 1, 999)
+    catch _:_ ->
+      io:format("Invalid/missing 'nval' parameter\n", []),
+      throw(arg_bad_or_missing)
+    end;
+fold_query_arg(bucket, Keys) ->
+    case proplists:get_value("bucket", Keys) of
         A when is_list(A) ->
             case string:split(A, "/") of
                 [BT, B] ->
@@ -952,49 +966,72 @@ fold_query_spec(bucket, Args) ->
                     end;
                 _ ->
                     bin_from_maybe_hex(A)
-            end
+            end;
+        undefined ->
+            io:format("Missing 'bucket' parameter\n", []),
+            throw(arg_bad_or_missing)
     end;
-fold_query_spec(key_range, Args) ->
-    case proplists:get_value("key_range", Args) of
+fold_query_arg(key_range, Keys) ->
+    case proplists:get_value("key_range", Keys) of
         "all" -> all;
         A when is_list(A) ->
             [From, To] = string:split(A, ","),
             {bin_from_maybe_hex(From), bin_from_maybe_hex(To)}
     end;
-fold_query_spec(modified_range, Args) ->
-    case proplists:get_value("modified_range", Args) of
-        "all" -> all;
-        A when is_list(A) ->
-            [From, To] = string:split(A, ","),
-            {date, calendar:rfc3339_to_system_time(From),
-             calendar:rfc3339_to_system_time(To)}
+fold_query_arg(modified_range, Keys) ->
+    try
+        case proplists:get_value("modified_range", Keys) of
+            "all" -> all;
+            A when is_list(A) ->
+                [From, To] = string:split(A, ","),
+                {date, calendar:rfc3339_to_system_time(From),
+                 calendar:rfc3339_to_system_time(To)}
+        end
+    catch _:_ ->
+            io:format("Missing/malformed 'modified_range' parameter\n", []),
+            throw(arg_bad_or_missing)
     end;
-fold_query_spec(segments, Args) ->
-    case proplists:get_value("segments", Args) of
-        "all" -> all;
-        A when is_list(A) ->
-            [SegmentFilter_, TreeSize_] = string:split(A, ";"),
-            SegmentFilter = [ensure_valid_range(S, 0, infinity)
-                             || S <- string:split(SegmentFilter_, ",", all)],
-            TreeSize = tree_size(TreeSize_),
-            {segments, SegmentFilter, TreeSize}
+fold_query_arg(segments, Keys) ->
+    try
+        case proplists:get_value("segments", Keys) of
+            "all" -> all;
+            A when is_list(A) ->
+                [SegmentFilter_, TreeSize_] = string:split(A, ";"),
+                SegmentFilter = [ensure_valid_range(S, 0, infinity)
+                                 || S <- string:split(SegmentFilter_, ",", all)],
+                TreeSize = tree_size(TreeSize_),
+                {segments, SegmentFilter, TreeSize}
+        end
+    catch _:_ ->
+            io:format("Missing/malformed 'segments' parameter\n", []),
+            throw(arg_bad_or_missing)
     end;
-fold_query_spec(sibling_count_or_object_size, Args) ->
-    case {proplists:get_value("sibling_count", Args),
-          proplists:get_value("object_size", Args)} of
-        {A, _} when is_list(A) ->
-            {sibling_count, ensure_valid_range(A, 0, infinity)};
-        {_, A} when is_list(A) ->
-            {object_size, ensure_valid_range(A, 0, infinity)}
+fold_query_arg(sibling_count_or_object_size, Keys) ->
+    try
+        case {proplists:get_value("sibling_count", Keys),
+              proplists:get_value("object_size", Keys)} of
+            {A, undefined} when is_list(A) ->
+                {sibling_count, ensure_valid_range(A, 0, infinity)};
+            {undefined, A} when is_list(A) ->
+                {object_size, ensure_valid_range(A, 0, infinity)}
+        end
+    catch _:_ ->
+            io:format("Missing/malformed 'sibling_count' or 'object_size' parameter\n", []),
+            throw(arg_bad_or_missing)
     end;
-fold_query_spec(change_method, Args) ->
-    case proplists:get_value("change_method", Args) of
-        "jobs:" ++ V ->
-            {jobs, ensure_valid_range(V, 1, infinity)};
-        "local" ->
-            local;
-        "count" ->
-            count
+fold_query_arg(change_method, Keys) ->
+    try
+        case proplists:get_value("change_method", Keys) of
+            "jobs:" ++ V ->
+                {jobs, ensure_valid_range(V, 1, infinity)};
+            "local" ->
+                local;
+            "count" ->
+                count
+        end
+    catch _:_ ->
+            io:format("Missing/malformed 'change_method' parameter\n", []),
+            throw(arg_bad_or_missing)
     end.
 
 ensure_valid_range(V_, Min, infinity) ->
