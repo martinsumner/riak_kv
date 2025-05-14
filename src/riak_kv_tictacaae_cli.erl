@@ -426,7 +426,7 @@ set_worker_pool_size(Nodes, Pool, Val) ->
 
 
 rebuild_soon_specs() ->
-    [["riak-admin", "tictacaae", "rebuild-soon"],
+    [["riak-admin", "tictacaae", "rebuild-soon", '*'],
      '_', [?NODEOPT, ?PARTITIONOPT],
      fun(A, B, C) -> main(fun rebuild_soon_cmd/3, A, B, C) end
     ].
@@ -534,10 +534,10 @@ to_partition(A) ->
             {error, bad_partition}
     end.
 
-%% ensure_options_consistent(NN, Specific) when length(NN) > 1,
-%%                                              Specific /= all ->
-%%     io:format("With more than a single node, only -p all is allowed\n", []),
-%%     throw(inconsistent_options);
+ensure_options_consistent(NN, Specific) when length(NN) > 1,
+                                             Specific /= all ->
+    io:format("With more than a single node, only -p all is allowed\n", []),
+    throw(inconsistent_options);
 ensure_options_consistent(_, _) -> ok.
 
 schedule_nextrebuild(NN, PP, Delay) ->
