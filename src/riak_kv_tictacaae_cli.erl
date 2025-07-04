@@ -587,9 +587,9 @@ treestatus_specs() ->
 treestatus_usage() ->
     ["Generate the tree rebuild report:\n\n",
      "  riak admin tictacaae treestatus [--show STATES]\n\n",
-     "STATES is a comma-separated list of 'unbuilt', 'built',\n",
+     "STATES is a comma-separated list of ''empty', 'partial', 'built',\n",
      "'rebuilding', 'building', or 'all'. Default is\n",
-     "'unbuilt,rebuilding,building'.\n"
+     "'partial,rebuilding,building'.\n"
     ].
 
 treestatus_cmd([_, _, _], _, Options) ->
@@ -611,17 +611,20 @@ get_aae_progress_report() ->
          TictacRebuilding = riak_kv_vnode:aae_rebuilding(VNState),
          InProgress = TictacRebuilding /= false,
          AAEReport = aae_controller:aae_produce_progress_report(AAECntrl),
+         IsEmpty = proplists:get_value(is_empty, AAEReport),
          LastRebuild = proplists:get_value(last_rebuild, AAEReport),
          NextRebuild = proplists:get_value(next_rebuild, AAEReport),
          Status =
-             case {LastRebuild, InProgress, NextRebuild} of
-                 {never, false, Scheduled} when Scheduled /= undefined ->
-                     unbuilt;
-                 {Built, false, _} when Built /= never ->
+             case {IsEmpty, LastRebuild, InProgress, NextRebuild} of
+                 {true, _, _, _} ->
+                     empty;
+                 {_, never, false, Scheduled} when Scheduled /= undefined ->
+                     partial;
+                 {_, Built, false, _} when Built /= never ->
                      built;
-                 {Built, true, _} when Built /= never ->
+                 {_, Built, true, _} when Built /= never ->
                      rebuilding;
-                 {never, true, _} ->
+                 {_, never, true, _} ->
                      building
              end,
          Extra = [{status, Status},
@@ -634,11 +637,11 @@ get_aae_progress_report() ->
 print_aae_progress_report(Report, Options) ->
     Show_ =
         case proplists:get_all_values(show, Options) of
-            [] -> ["unbuilt","rebuilding","building"];
+            [] -> ["partial","rebuilding","building"];
             Some ->
                 case lists:member("all", Some) of
                     true ->
-                        ["unbuilt", "rebuilding", "building", "built"];
+                        ["empty", "partial", "rebuilding", "building", "built"];
                     false ->
                         lists:append([string:split(S, ",", all) || S <- Some])
                 end
@@ -652,15 +655,13 @@ print_aae_progress_report(Report, Options) ->
                   NextRebuild = time2s(proplists:get_value(next_rebuild, M)),
                   ControllerPid = proplists:get_value(controller_pid, M),
                   Status = proplists:get_value(status, M),
-                  KeyStoreCurrentStatus = proplists:get_value(key_store_current_status, M),
                   case lists:member(Status, Show) of
                       true ->
                           [[{idx, Idx},
                             {status, Status},
                             {last_rebuild, LastRebuild},
                             {next_rebuild, NextRebuild},
-                            {aae_cntr_pid, ControllerPid},
-                            {keystore_status, KeyStoreCurrentStatus}] | Q];
+                            {aae_cntr_pid, ControllerPid}] | Q];
                       false ->
                           Q
                   end
