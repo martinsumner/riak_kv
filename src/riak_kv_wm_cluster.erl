@@ -258,33 +258,61 @@ nodes_and_claim_percentages(Ring) ->
 -spec process_post(#wm_reqdata{}, #context{}) -> {boolean(), #wm_reqdata{}, #context{}}.
 process_post(RD, Context) ->
     try
-        Action =
+        Res =
             case mochijson2:decode(wrq:req_body(RD), [{format, map}]) of
-                #{<<"plan">> := <<"clear">>} ->
-                    {plan, clear};
-                #{<<"plan">> := <<"commit">>} ->
-                    {plan, commit};
+                #{<<"action">> := <<"clear_plan">>} ->
+                    riak_core_claimant:clear();
+                #{<<"action">> := <<"commit_plan">>} ->
+                    riak_core_claimant:commit();
 
-                #{<<"stage">> := #{<<"join">> := A}} ->
-                    {stage, {join, binary_to_atom(A)}};
-                #{<<"stage">> := #{<<"leave">> := A}} ->
-                    {stage, {leave, binary_to_atom(A)}};
-                #{<<"stage">> := #{<<"remove">> := A}} ->
-                    {stage, {remove, binary_to_atom(A)}};
-                #{<<"stage">> := #{<<"replace">> := A}} ->
-                    [A1, A2] = string:split(A, ":", all),
-                    {stage, {replace, binary_to_atom(A1), binary_to_atom(A2)}};
-                #{<<"stage">> := #{<<"force_replace">> := A}} ->
-                    [A1, A2] = string:split(A, ":", all),
-                    {stage, {force_replace, binary_to_atom(A1), binary_to_atom(A2)}};
+                #{<<"action">> := <<"stage_join">>,
+                  <<"params">> := #{<<"node">> := A}} ->
+                    Node = binary_to_atom(A),
+                    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+                    case riak_core_ring:all_members(Ring) of
+                        [_Me] ->
+                            riak_core:staged_join(Node);
+                        _ ->
+                            try rpc:call(Node, riak_core, staged_join, [node()]) of
+                                X -> X
+                            catch
+                                exit:R ->
+                                    logger:warning("rpc:call(~p, riak_core, staged_join, [~p]) failed with reason: ~p", [Node, node(), R]),
+                                    {badrpc, nodedown}
+                            end
+                    end;
+                #{<<"action">> := <<"stage_leave">>,
+                  <<"params">> := #{<<"node">> := A}} ->
+                    riak_core_claimant:leave_member(binary_to_atom(A));
+                #{<<"action">> := <<"stage_remove">>,
+                  <<"params">> := #{<<"node">> := A}} ->
+                    riak_core_claimant:remove_member(binary_to_atom(A));
+                #{<<"action">> := <<"stage_replace">>,
+                  <<"params">> := #{<<"node">> := A1,
+                                    <<"with">> := A2}} ->
+                    riak_core_claimant:replace(binary_to_atom(A1), binary_to_atom(A2));
+                #{<<"action">> := <<"stage_force_replace">>,
+                  <<"params">> := #{<<"node">> := A1,
+                                    <<"with">> := A2}} ->
+                    riak_core_claimant:force_replace(binary_to_atom(A1), binary_to_atom(A2));
 
-                #{<<"node">> := #{<<"down">> := A}} ->
-                    {node, {down, binary_to_atom(A)}};
-                #{<<"node">> := #{<<"stop">> := A}} ->
-                    {node, {stop, binary_to_atom(A)}}
+                #{<<"action">> := <<"down_node">>,
+                  <<"params">> := #{<<"node">> := A}} ->
+                    riak_core:down(binary_to_atom(A));
+
+                #{<<"action">> := <<"stop_node">>,
+                  <<"params">> := #{<<"node">> := A}} ->
+                    Node = binary_to_atom(A),
+                    try rpc:call(Node, riak_core, stop, []) of
+                        X -> X
+                    catch
+                        exit:R ->
+                            logger:warning("rpc:call(~p, riak_core, stop, []) failed with reason: ~p", [Node, R]),
+                            {badrpc, nodedown}
+                    end
             end,
         ResF = fun(A) -> wrq:append_to_resp_body(mochijson2:encode(#{result => A}), RD) end,
-        case execute_action(Action) of
+        case Res of
             ok ->
                 {true, ResF(<<"ok">>), Context};
             {error, ring_not_ready} ->
@@ -315,45 +343,3 @@ process_post(RD, Context) ->
             ?LOG_WARNING("malformed action: ~p:~p  ~p", [_t, _e, _st]),
             {{halt, 400}, wrq:append_to_resp_body(<<"malformed action">>, RD), Context}
     end.
-
-execute_action(Action) ->
-    case Action of
-        {plan, clear} ->
-            riak_core_claimant:clear();
-        {plan, commit} ->
-            riak_core_claimant:commit();
-        {stage, {join, Node}} ->
-            {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-            case riak_core_ring:all_members(Ring) of
-                [_Me] ->
-                    riak_core:staged_join(Node);
-                _ ->
-                    try rpc:call(Node, riak_core, staged_join, [node()]) of
-                        X -> X
-                    catch
-                        exit:R ->
-                            logger:warning("rpc:call(~p, riak_core, staged_join, [~p]) failed with reason: ~p", [Node, node(), R]),
-                            {badrpc, nodedown}
-                    end
-            end;
-        {stage, {leave, Node}} ->
-            riak_core_claimant:leave_member(Node);
-        {stage, {remove, Node}} ->
-            riak_core_claimant:remove_member(Node);
-        {stage, {replace, Node, With}} ->
-            riak_core_claimant:replace(Node, With);
-        {stage, {force_replace, Node, With}} ->
-            riak_core_claimant:force_replace(Node, With);
-
-        {node, {down, Node}} ->
-            riak_core:down(Node);
-        {node, {stop, Node}} ->
-            try rpc:call(Node, riak_core, stop, []) of
-                X -> X
-            catch
-                exit:R ->
-                    logger:warning("rpc:call(~p, riak_core, stop, []) failed with reason: ~p", [Node, R]),
-                    {badrpc, nodedown}
-            end
-    end.
-
