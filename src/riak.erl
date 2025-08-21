@@ -26,7 +26,9 @@
 -export([client_connect/1,client_connect/2,
          client_test/1,
          local_client/0,local_client/1,
-         join/1]).
+         join/1,
+         restart/0
+        ]).
 -export([code_hash/0]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -209,3 +211,14 @@ client_test_phase3(Client, WrittenValue) ->
             io:format("Failed to read test value: ~p", [Error]),
             error
     end.
+
+-spec restart() -> ok.
+restart() ->
+    P =
+        case lists:keyfind("RELEASE_PROG", 1, os:env()) of
+            {_, "/usr" ++ _} ->
+                "/run/riak/";
+            _ ->
+                ""
+        end,
+    file:write_file(P ++ "RESTART_RIAK", <<>>).

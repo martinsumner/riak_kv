@@ -319,7 +319,17 @@ process_post(RD, Context) ->
                   <<"params">> := #{<<"node">> := A,
                                     <<"config">> := B,
                                     <<"persist">> := C}} ->
-                    ok = apply_app_env(binary_to_atom(A), B, C)
+                    ok = apply_app_env(binary_to_atom(A), B, C);
+
+                #{<<"action">> := <<"restart">>,
+                  <<"params">> := #{<<"node">> := A}} ->
+                    ok = signal_restart(binary_to_atom(A)),
+                    spawn(
+                      fun() ->
+                              timer:sleep(3000 + 2000),
+                              ?LOG_NOTICE("For restart via riak_cnotrol to work, make sure riak-deadmanshand is running")
+                      end),
+                    ok
             end,
         ResF = fun(A) -> wrq:append_to_resp_body(mochijson2:encode(#{result => A}), RD) end,
         case Res of
@@ -364,7 +374,9 @@ collect_app_env(Node) ->
     rpc:call(Node, riak_kv_util, collect_all_app_env, []).
 
 apply_app_env(Node, AppEE_s, Persist) ->
-    case erl_parse:parse_term(element(2, erl_scan:string(binary_to_list(AppEE_s) ++ "."))) of
+    case erl_parse:parse_term(
+           element(2, erl_scan:string(
+                        binary_to_list(AppEE_s) ++ "."))) of
         {ok, AppEE} ->
             apply_app_env2(Node, AppEE, Persist);
         {error, _e} ->
@@ -375,3 +387,9 @@ apply_app_env2(Node, AppEE, Persist) when Node == node() ->
     riak_kv_util:apply_app_env(AppEE, Persist);
 apply_app_env2(Node, AppEE, Persist) ->
     rpc:call(Node, riak_kv_util, apply_app_env, [AppEE, Persist]).
+
+
+signal_restart(Node) when Node == node() ->
+    riak:restart();
+signal_restart(Node) ->
+    rpc:call(Node, riak, restart, []).
