@@ -27,7 +27,7 @@
          client_test/1,
          local_client/0,local_client/1,
          join/1,
-         restart/0
+         deadmans_hand_restart/0
         ]).
 -export([code_hash/0]).
 
@@ -212,8 +212,8 @@ client_test_phase3(Client, WrittenValue) ->
             error
     end.
 
--spec restart() -> ok.
-restart() ->
+-spec deadmans_hand_restart() -> ok.
+deadmans_hand_restart() ->
     P =
         case lists:keyfind("RELEASE_PROG", 1, os:env()) of
             {_, "/usr" ++ _} ->
@@ -221,4 +221,5 @@ restart() ->
             _ ->
                 ""
         end,
-    file:write_file(P ++ "RESTART_RIAK", <<>>).
+    _ = file:write_file(P ++ "RESTART_RIAK", <<>>),
+    ok.

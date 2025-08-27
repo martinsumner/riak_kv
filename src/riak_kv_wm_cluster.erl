@@ -132,11 +132,16 @@ to_json(RD, Context) ->
     case get_plan() of
         {error, ring_not_ready} ->
             {{halt, 425}, wrq:append_to_resp_body(<<"ring not ready">>, RD), Context};
+        {error, claimant_is_down} ->
+            {{halt, 400}, wrq:append_to_resp_body(<<"claimant node is down">>, RD), Context};
         {error, Reason} ->
             {{halt, 500}, wrq:set_resp_body(iolist_to_binary(io_lib:format("~p", [Reason])), RD), Context};
         {ok, Changes_, Claim} ->
             Current = [jsonify_current_node(
-                         apply_status_change(Node, Changes_), Claimant) || Node <- Nodes],
+                         apply_status_change(Node, Changes_),
+                         Claimant,
+                         riak_core_node_watcher:services(proplists:get_value(node, Node)))
+                       || Node <- Nodes],
             Final = [#{name => Name,
                        ring_pct => P1,
                        pending_pct => P2} || {Name, {P1, P2}} <- Claim],
@@ -163,7 +168,7 @@ apply_status_change(Node, Changes) ->
             Node ++ [{action, Action}]
     end.
 
-jsonify_current_node(Node, Claimant) ->
+jsonify_current_node(Node, Claimant, Services) ->
     LWM = 0.1,
     MemUsed = proplists:get_value(mem_used, Node, null),
     MemTotal = proplists:get_value(mem_total, Node, null),
@@ -174,6 +179,7 @@ jsonify_current_node(Node, Claimant) ->
               status => proplists:get_value(status, Node),
               system_info => proplists:get_value(system_info, Node),
               reachable => Reachable,
+              services => Services,
               ring_pct => proplists:get_value(ring_pct, Node),
               pending_pct => proplists:get_value(pending_pct, Node),
               mem_total => MemTotal,
@@ -205,7 +211,7 @@ get_member_info({Node, Status}, Ring) ->
     PctPending = length(FutureIndices) / RingSize,
 
     case rpc:call(Node, riak_kv_util, node_info_for_riak_control, []) of
-        {badrpc, nodedown} ->
+        {badrpc, _} ->
             [{node, Node},
              {status, down}];
         MemberInfo ->
@@ -239,8 +245,8 @@ get_plan() ->
                     {ok, Changes, compute_final_ring_claim(NextRings)}
             end
     catch
-        _:E ->
-            {error, E}
+        _:{{nodedown, _}, _} ->
+            {error, claimant_is_down}
     end.
 
 compute_final_ring_claim(Rings) ->
@@ -390,6 +396,6 @@ apply_app_env2(Node, AppEE, Persist) ->
 
 
 signal_restart(Node) when Node == node() ->
-    riak:restart();
+    riak:deadmans_hand_restart();
 signal_restart(Node) ->
-    rpc:call(Node, riak, restart, []).
+    rpc:call(Node, riak, deadmans_hand_restart, []).
