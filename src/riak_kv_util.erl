@@ -59,6 +59,7 @@
         node_info_for_riak_control/0,
         system_info/0,
         collect_all_app_env/0
+        apply_app_env/2
         ]).
 -export([report_hashtree_tokens/0, reset_hashtree_tokens/2]).
 -export([reset_aae_key_filter/0]).
@@ -890,6 +891,21 @@ collect_all_app_env() ->
       fun({_, E}) -> E /= [] end,
       [{App, application:get_all_env(App)} || App <- Apps]
      ).
+
+-spec apply_app_env(proplists:proplist(), Persist::boolean()) -> ok.
+apply_app_env(AppEE, false) ->
+    lists:map(
+      fun({App, EE}) ->
+              [application:set_env(App, K, V) || {K, V} <- EE]
+      end,
+      AppEE),
+    ok;
+apply_app_env(AppEE, true) ->
+    apply_app_env(AppEE, false),
+    ?LOG_NOTICE("STUB writing advanced.config"),
+    
+    ok.
+
 
 %% ===================================================================
 %% EUnit tests

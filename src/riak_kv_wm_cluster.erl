@@ -314,7 +314,12 @@ process_post(RD, Context) ->
                 #{<<"action">> := <<"get_config">>,
                   <<"params">> := #{<<"node">> := A}} ->
                     AllAppEnvs = collect_app_env(binary_to_atom(A)),
-                    {ok, iolist_to_binary(io_lib:format("~120p", [AllAppEnvs]))}
+                    {ok, iolist_to_binary(io_lib:format("~120p", [AllAppEnvs]))};
+                #{<<"action">> := <<"put_config">>,
+                  <<"params">> := #{<<"node">> := A,
+                                    <<"config">> := B,
+                                    <<"persist">> := C}} ->
+                    ok = apply_app_env(binary_to_atom(A), B, C)
             end,
         ResF = fun(A) -> wrq:append_to_resp_body(mochijson2:encode(#{result => A}), RD) end,
         case Res of
@@ -342,6 +347,8 @@ process_post(RD, Context) ->
                 {true, ResF(<<"already leaving">>), Context};
             {error, is_up} ->
                 {true, ResF(<<"node is up">>), Context};
+            {error, bad_config} ->
+                {true, ResF(<<"bad config">>), Context};
             {badrpc, nodedown} ->
                 {{halt, 412}, ResF(<<"node is down">>), Context}
         end
@@ -355,3 +362,16 @@ collect_app_env(Node) when Node == node() ->
     riak_kv_util:collect_all_app_env();
 collect_app_env(Node) ->
     rpc:call(Node, riak_kv_util, collect_all_app_env, []).
+
+apply_app_env(Node, AppEE_s, Persist) ->
+    case erl_parse:parse_term(element(2, erl_scan:string(binary_to_list(AppEE_s) ++ "."))) of
+        {ok, AppEE} ->
+            apply_app_env2(Node, AppEE, Persist);
+        {error, _e} ->
+            ?LOG_WARNING("malformed term: ~p", [_e]),
+            {error, bad_config}
+    end.
+apply_app_env2(Node, AppEE, Persist) when Node == node() ->
+    riak_kv_util:apply_app_env(AppEE, Persist);
+apply_app_env2(Node, AppEE, Persist) ->
+    rpc:call(Node, riak_kv_util, apply_app_env, [AppEE, Persist]).
