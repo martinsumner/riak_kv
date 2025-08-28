@@ -1,0 +1,359 @@
+%% -------------------------------------------------------------------
+%%
+%% riak_kv_wm_cluster: a Webmachine resource for cluster ops
+%%
+%% Copyright (c) 2025 TI Tokyo.  All Rights Reserved.
+%%
+%% This file is provided to you under the Apache License,
+%% Version 2.0 (the "License"); you may not use this file
+%% except in compliance with the License.  You may obtain
+%% a copy of the License at
+%%
+%%   http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing,
+%% software distributed under the License is distributed on an
+%% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+%% KIND, either express or implied.  See the License for the
+%% specific language governing permissions and limitations
+%% under the License.
+%%
+%% -------------------------------------------------------------------
+
+-module(riak_kv_wm_cluster).
+
+-export([init/1,
+         options/2,
+         service_available/2,
+         allowed_methods/2,
+         is_authorized/2,
+         forbidden/2,
+         content_types_provided/2,
+         content_types_accepted/2,
+         process_post/2,
+         to_json/2
+        ]).
+
+-include_lib("webmachine/include/webmachine.hrl").
+-include_lib("kernel/include/logger.hrl").
+
+-record(context, {security :: undefined | riak_core_security:context()}).
+
+init([]) ->
+    {ok, #context{}}.
+
+-spec service_available(#wm_reqdata{}, #context{}) -> {boolean(), #wm_reqdata{}, #context{}}.
+service_available(RD, Ctx) ->
+    {true, wrq:set_resp_headers(riak_kv_wm_utils:cors_headers(), RD), Ctx}.
+
+-spec allowed_methods(#wm_reqdata{}, #context{}) -> {[atom()], #wm_reqdata{}, #context{}}.
+allowed_methods(RD, Ctx) ->
+    {['OPTIONS', 'GET', 'POST'], wrq:set_resp_headers(riak_kv_wm_utils:cors_headers(), RD), Ctx}.
+
+-spec options(#wm_reqdata{}, #context{}) -> {[{string(), string()}], #wm_reqdata{}, #context{}}.
+options(RD, Ctx) ->
+    {riak_kv_wm_utils:cors_headers(), RD, Ctx}.
+
+-spec is_authorized(#wm_reqdata{}, #context{}) ->
+          {string()|boolean()|{halt,426}, #wm_reqdata{}, #context{}}.
+is_authorized(RD, Ctx) ->
+    case wrq:method(RD) of
+        'OPTIONS' ->
+            {true, wrq:set_resp_headers(riak_kv_wm_utils:cors_headers(), RD), Ctx};
+        _ ->
+            is_authorized2(RD, Ctx)
+    end.
+is_authorized2(RD, Ctx) ->
+    case riak_api_web_security:is_authorized(RD) of
+        false ->
+            {"Basic realm=\"Riak\"", RD, Ctx};
+        {true, SecContext} ->
+            {true, RD, Ctx#context{security = SecContext}};
+        insecure ->
+            {{halt, 426}, wrq:append_to_resp_body(<<"Security is enabled and "
+                    "Riak does not accept credentials over HTTP. Try HTTPS "
+                    "instead.">>, RD), Ctx}
+    end.
+
+-spec forbidden(#wm_reqdata{}, #context{}) -> {boolean(), #wm_reqdata{}, #context{}}.
+forbidden(RD, Ctx) ->
+    case wrq:method(RD) of
+        'OPTIONS' ->
+            {false, RD, Ctx};
+        _ ->
+            forbidden2(RD, Ctx)
+    end.
+forbidden2(RD, Ctx = #context{security = Security}) ->
+    case riak_kv_wm_utils:is_forbidden(RD) of
+        true ->
+            {true, RD, Ctx};
+        false ->
+            Res = riak_core_security:check_permission(
+                    {"riak_kv.riak_control"}, Security),
+            case Res of
+                {false, Error, _} ->
+                    RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
+                    {true, wrq:append_to_resp_body(
+                             unicode:characters_to_binary(Error, utf8, utf8), RD1), Ctx};
+                {true, _} ->
+                    {false, RD, Ctx}
+            end
+    end.
+
+
+-spec content_types_provided(#wm_reqdata{}, #context{}) ->
+          {[{string(), atom()}], #wm_reqdata{}, #context{}}.
+content_types_provided(RD, Ctx) ->
+    {[{"application/json", to_json}], RD, Ctx}.
+
+-spec content_types_accepted(#wm_reqdata{}, #context{}) ->
+          {[{string(), atom()}], #wm_reqdata{}, #context{}}.
+content_types_accepted(RD, Ctx) ->
+    {[{"application/json", from_json}], RD, Ctx}.
+
+
+-spec to_json(#wm_reqdata{}, #context{}) -> {binary(), #wm_reqdata{}, #context{}}.
+to_json(RD, Context) ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    Claimant = riak_core_ring:claimant(Ring),
+    Nodes = get_nodes(),
+    {DownNodes, Pending_} = riak_core_status:transfers(),
+    Pending = lists:map(
+                fun({waiting_to_handoff, Node, Cnt}) ->
+                        #{node => Node,
+                          state => waiting_to_handoff,
+                          count => Cnt};
+                   ({stopped, Node, Cnt}) ->
+                        #{node => Node,
+                          state => stopped,
+                          count => Cnt}
+                end, Pending_),
+
+    case get_plan() of
+        {error, ring_not_ready} ->
+            {{halt, 425}, wrq:append_to_resp_body(<<"ring not ready">>, RD), Context};
+        {error, Reason} ->
+            {{halt, 500}, wrq:set_resp_body(iolist_to_binary(io_lib:format("~p", [Reason])), RD), Context};
+        {ok, Changes_, Claim} ->
+            Current = [jsonify_current_node(
+                         apply_status_change(Node, Changes_), Claimant) || Node <- Nodes],
+            Final = [#{name => Name,
+                       ring_pct => P1,
+                       pending_pct => P2} || {Name, {P1, P2}} <- Claim],
+            Changes = [#{name => Name,
+                         action => Action} || {Name, Action} <- Changes_],
+
+            Res = #{current_cluster => Current,
+                    staged_changes => Changes,
+                    final_cluster => Final,
+                    down_nodes => DownNodes,
+                    transfers => Pending},
+
+            {mochijson2:encode(Res), RD, Context}
+    end.
+
+apply_status_change(Node, Changes) ->
+    Name = proplists:get_value(node, Node),
+    case proplists:get_value(Name, Changes) of
+        undefined ->
+            Node;
+        {Action, Replacement} ->
+            Node ++ [{action, Action}, {replacement, Replacement}];
+        Action ->
+            Node ++ [{action, Action}]
+    end.
+
+jsonify_current_node(Node, Claimant) ->
+    LWM = 0.1,
+    MemUsed = proplists:get_value(mem_used, Node, null),
+    MemTotal = proplists:get_value(mem_total, Node, null),
+    Reachable = proplists:get_value(reachable, Node, false),
+    LowMem = low_mem(Reachable, MemUsed, MemTotal, LWM),
+    if Reachable ->
+            #{name => proplists:get_value(node, Node),
+              status => proplists:get_value(status, Node),
+              system_info => proplists:get_value(system_info, Node),
+              reachable => Reachable,
+              ring_pct => proplists:get_value(ring_pct, Node),
+              pending_pct => proplists:get_value(pending_pct, Node),
+              mem_total => MemTotal,
+              mem_used => MemUsed,
+              mem_erlang => proplists:get_value(mem_erlang, Node),
+              low_mem => LowMem,
+              is_me => (proplists:get_value(node, Node) == node()),
+              claimant => (proplists:get_value(node, Node) == Claimant),
+              staged_action => proplists:get_value(action, Node),
+              replacement => proplists:get_value(replacement, Node)};
+       el/=se ->
+            #{name => proplists:get_value(node, Node),
+              status => proplists:get_value(status, Node),
+              reachable => Reachable,
+              is_me => false}
+    end.
+
+
+get_nodes() ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    Members = riak_core_ring:all_member_status(Ring),
+    [get_member_info(M, Ring) || M <- Members].
+
+get_member_info({Node, Status}, Ring) ->
+    RingSize = riak_core_ring:num_partitions(Ring),
+    Indices = riak_core_ring:indices(Ring, Node),
+    FutureIndices = riak_core_ring:future_indices(Ring, Node),
+    PctRing = length(Indices) / RingSize,
+    PctPending = length(FutureIndices) / RingSize,
+
+    case rpc:call(Node, riak_kv_util, node_info_for_riak_control, []) of
+        {badrpc, nodedown} ->
+            [{node, Node},
+             {status, down}];
+        MemberInfo ->
+            MemberInfo ++ [{node, Node},
+                           {status, Status},
+                           {ring_pct, PctRing},
+                           {pending_pct, PctPending}
+                          ]
+    end.
+
+low_mem(_Reachable = false, _, _, _) ->
+    0.0;
+low_mem(true, MemUsed, MemTotal, LWM) ->
+    case MemTotal of
+        undefined ->
+            false;
+        _ ->
+            1.0 - (MemUsed/MemTotal) < LWM
+    end.
+
+
+get_plan() ->
+    try riak_core_claimant:plan() of
+        {error, Error} ->
+            {error, Error};
+        {ok, Changes, NextRings} ->
+            case Changes of
+                [] ->
+                    {ok, [], []};
+                _ ->
+                    {ok, Changes, compute_final_ring_claim(NextRings)}
+            end
+    catch
+        _:E ->
+            {error, E}
+    end.
+
+compute_final_ring_claim(Rings) ->
+    {_, FinalRing} = lists:last(Rings),
+    nodes_and_claim_percentages(FinalRing).
+
+nodes_and_claim_percentages(Ring) ->
+    Nodes = lists:keysort(2, riak_core_ring:all_member_status(Ring)),
+    [{Name, riak_core_console:pending_claim_percentage(Ring, Name)} ||
+        {Name, _} <- Nodes].
+
+
+
+
+-spec process_post(#wm_reqdata{}, #context{}) -> {boolean(), #wm_reqdata{}, #context{}}.
+process_post(RD, Context) ->
+    try
+        Action =
+            case mochijson2:decode(wrq:req_body(RD), [{format, map}]) of
+                #{<<"plan">> := <<"clear">>} ->
+                    {plan, clear};
+                #{<<"plan">> := <<"commit">>} ->
+                    {plan, commit};
+
+                #{<<"stage">> := #{<<"join">> := A}} ->
+                    {stage, {join, binary_to_atom(A)}};
+                #{<<"stage">> := #{<<"leave">> := A}} ->
+                    {stage, {leave, binary_to_atom(A)}};
+                #{<<"stage">> := #{<<"remove">> := A}} ->
+                    {stage, {remove, binary_to_atom(A)}};
+                #{<<"stage">> := #{<<"replace">> := A}} ->
+                    [A1, A2] = string:split(A, ":", all),
+                    {stage, {replace, binary_to_atom(A1), binary_to_atom(A2)}};
+                #{<<"stage">> := #{<<"force_replace">> := A}} ->
+                    [A1, A2] = string:split(A, ":", all),
+                    {stage, {force_replace, binary_to_atom(A1), binary_to_atom(A2)}};
+
+                #{<<"node">> := #{<<"down">> := A}} ->
+                    {node, {down, binary_to_atom(A)}};
+                #{<<"node">> := #{<<"stop">> := A}} ->
+                    {node, {stop, binary_to_atom(A)}}
+            end,
+        ResF = fun(A) -> wrq:append_to_resp_body(mochijson2:encode(#{result => A}), RD) end,
+        case execute_action(Action) of
+            ok ->
+                {true, ResF(<<"ok">>), Context};
+            {error, ring_not_ready} ->
+                {{halt, 425}, ResF(<<"ring not ready">>), Context};
+            {error, invalid_replacement} ->
+                {true, ResF(<<"invalid replacement">>), Context};
+            {error, already_replacement} ->
+                {true, ResF(<<"already a replacement">>), Context};
+            {error, not_member} ->
+                {true, ResF(<<"not a member">>), Context};
+            {error, not_single_node} ->
+                {true, ResF(<<"not a single node">>), Context};
+            {error, is_claimant} ->
+                {true, ResF(<<"node is claimant">>), Context};
+            {error, only_member} ->
+                {true, ResF(<<"node is last remaining">>), Context};
+            {error, self_join} ->
+                {true, ResF(<<"self-join">>), Context};
+            {error, already_leaving} ->
+                {true, ResF(<<"already leaving">>), Context};
+            {error, is_up} ->
+                {true, ResF(<<"node is up">>), Context};
+            {badrpc, nodedown} ->
+                {{halt, 412}, ResF(<<"node is down">>), Context}
+        end
+    catch
+        _t:_e:_st ->
+            ?LOG_WARNING("malformed action: ~p:~p  ~p", [_t, _e, _st]),
+            {{halt, 400}, wrq:append_to_resp_body(<<"malformed action">>, RD), Context}
+    end.
+
+execute_action(Action) ->
+    case Action of
+        {plan, clear} ->
+            riak_core_claimant:clear();
+        {plan, commit} ->
+            riak_core_claimant:commit();
+        {stage, {join, Node}} ->
+            {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+            case riak_core_ring:all_members(Ring) of
+                [_Me] ->
+                    riak_core:staged_join(Node);
+                _ ->
+                    try rpc:call(Node, riak_core, staged_join, [node()]) of
+                        X -> X
+                    catch
+                        exit:R ->
+                            logger:warning("rpc:call(~p, riak_core, staged_join, [~p]) failed with reason: ~p", [Node, node(), R]),
+                            {badrpc, nodedown}
+                    end
+            end;
+        {stage, {leave, Node}} ->
+            riak_core_claimant:leave_member(Node);
+        {stage, {remove, Node}} ->
+            riak_core_claimant:remove_member(Node);
+        {stage, {replace, Node, With}} ->
+            riak_core_claimant:replace(Node, With);
+        {stage, {force_replace, Node, With}} ->
+            riak_core_claimant:force_replace(Node, With);
+
+        {node, {down, Node}} ->
+            riak_core:down(Node);
+        {node, {stop, Node}} ->
+            try rpc:call(Node, riak_core, stop, []) of
+                X -> X
+            catch
+                exit:R ->
+                    logger:warning("rpc:call(~p, riak_core, stop, []) failed with reason: ~p", [Node, R]),
+                    {badrpc, nodedown}
+            end
+    end.
+
