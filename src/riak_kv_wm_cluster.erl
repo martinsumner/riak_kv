@@ -309,12 +309,19 @@ process_post(RD, Context) ->
                         exit:R ->
                             logger:warning("rpc:call(~p, riak_core, stop, []) failed with reason: ~p", [Node, R]),
                             {badrpc, nodedown}
-                    end
+                    end;
+
+                #{<<"action">> := <<"get_config">>,
+                  <<"params">> := #{<<"node">> := A}} ->
+                    AllAppEnvs = collect_app_env(binary_to_atom(A)),
+                    {ok, iolist_to_binary(io_lib:format("~120p", [AllAppEnvs]))}
             end,
         ResF = fun(A) -> wrq:append_to_resp_body(mochijson2:encode(#{result => A}), RD) end,
         case Res of
             ok ->
                 {true, ResF(<<"ok">>), Context};
+            {ok, ConfigString} ->
+                {true, ResF(ConfigString), Context};
             {error, ring_not_ready} ->
                 {{halt, 425}, ResF(<<"ring not ready">>), Context};
             {error, invalid_replacement} ->
@@ -343,3 +350,8 @@ process_post(RD, Context) ->
             ?LOG_WARNING("malformed action: ~p:~p  ~p", [_t, _e, _st]),
             {{halt, 400}, wrq:append_to_resp_body(<<"malformed action">>, RD), Context}
     end.
+
+collect_app_env(Node) when Node == node() ->
+    riak_kv_util:collect_all_app_env();
+collect_app_env(Node) ->
+    rpc:call(Node, riak_kv_util, collect_all_app_env, []).

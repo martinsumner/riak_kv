@@ -3,6 +3,7 @@
 %% riak_util: functions that are useful throughout Riak
 %%
 %% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%%               2025 TI Tokyo
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -56,7 +57,8 @@
         ngr_initial_timeout/0,
         sys_monitor_count/0,
         node_info_for_riak_control/0,
-        system_info/0
+        system_info/0,
+        collect_all_app_env/0
         ]).
 -export([report_hashtree_tokens/0, reset_hashtree_tokens/2]).
 -export([reset_aae_key_filter/0]).
@@ -881,7 +883,13 @@ s(_) -> "s".
 riak_version() ->
     element(2, lists:keyfind("riak", 1, release_handler:which_releases())).
 
-
+-spec collect_all_app_env() -> proplists:proplists().
+collect_all_app_env() ->
+    Apps = [A || {A, _, _} <- application:which_applications()],
+    lists:filter(
+      fun({_, E}) -> E /= [] end,
+      [{App, application:get_all_env(App)} || App <- Apps]
+     ).
 
 %% ===================================================================
 %% EUnit tests
