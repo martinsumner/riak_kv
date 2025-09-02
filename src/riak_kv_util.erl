@@ -58,8 +58,9 @@
         sys_monitor_count/0,
         node_info_for_riak_control/0,
         system_info/0,
-        collect_all_app_env/0
-        apply_app_env/2
+        collect_all_app_env/0,
+        apply_app_env/2,
+        write_advanced_config/1
         ]).
 -export([report_hashtree_tokens/0, reset_hashtree_tokens/2]).
 -export([reset_aae_key_filter/0]).
@@ -900,18 +901,57 @@ apply_app_env(AppEE, false) ->
       end,
       AppEE),
     ok;
-apply_app_env(AppEE, true) ->
-    apply_app_env(AppEE, false),
-    ?LOG_NOTICE("STUB writing advanced.config"),
-    
-    ok.
+apply_app_env(AppEE0, true) ->
+    apply_app_env(AppEE0, false),
+    AppEE9 = merge_app_envs(
+               collect_all_app_env(), AppEE0),
+    write_advanced_config(
+      io_lib:format("~p.\n", [AppEE9])).
 
+merge_app_envs(Base, Extra) ->
+    lists:foldl(
+      fun({App, EE}, Q) ->
+              case lists:keyfind(App, 1, Q) of
+                  false ->
+                      [{App, EE} | Q];
+                  {_, EE0} ->
+                      AppEE2 =
+                          lists:foldl(
+                            fun({K, V}, Q2) -> lists:keystore(K, 1, Q2, {K, V}) end,
+                            EE0, EE),
+                      lists:keyreplace(App, 1, Q, {App, AppEE2})
+              end
+      end,
+      Base,
+      Extra).
+
+-spec write_advanced_config(iolist()) -> ok | {error, file:posix() | badarg | terminated | system_limit}.
+write_advanced_config(Blob) ->
+    FN =
+        case os:getenv("USER") of
+            "riak" ->
+                "/etc/riak/advanced.config";
+            _ ->
+                "etc/advanced.config"
+        end,
+    file:write_file(FN, Blob).
 
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
 
 -ifdef(TEST).
+
+merge_app_envs_test() ->
+    [{app1, [{a, 1}, {b, 2}]},
+     {app2, [{a, 3}, {b, 4}]}] =
+        merge_app_envs([{app1, [{a, 1}, {b, 2}]}],
+                       [{app2, [{a, 3}, {b, 4}]}]),
+    [{app1, [{a, 1}, {b, 2}]},
+     {app2, [{a, 3}, {b, 4}]}] =
+        merge_app_envs([{app1, [{a, 1}, {b, 2}]}, {app2, [{a, not3}, {b, not4}]}],
+                       [{app2, [{a, 3}, {b, 4}]}]),
+    true.
 
 normalize_test() ->
     3 = normalize_rw_value(3, 3),

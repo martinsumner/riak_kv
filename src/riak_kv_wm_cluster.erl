@@ -263,9 +263,11 @@ nodes_and_claim_percentages(Ring) ->
 
 -spec process_post(#wm_reqdata{}, #context{}) -> {boolean(), #wm_reqdata{}, #context{}}.
 process_post(RD, Context) ->
+    Request = #{<<"action">> := Action} =
+        mochijson2:decode(wrq:req_body(RD), [{format, map}]),
     try
         Res =
-            case mochijson2:decode(wrq:req_body(RD), [{format, map}]) of
+            case Request of
                 #{<<"action">> := <<"clear_plan">>} ->
                     riak_core_claimant:clear();
                 #{<<"action">> := <<"commit_plan">>} ->
@@ -324,8 +326,13 @@ process_post(RD, Context) ->
                 #{<<"action">> := <<"put_config">>,
                   <<"params">> := #{<<"node">> := A,
                                     <<"config">> := B,
-                                    <<"persist">> := C}} ->
-                    ok = apply_app_env(binary_to_atom(A), B, C);
+                                    <<"persist">> := C,
+                                    <<"replace">> := D}} ->
+                    if D == true ->
+                            write_advanced_config(binary_to_atom(A), B);
+                       el/=se ->
+                            apply_app_env(binary_to_atom(A), B, C)
+                    end;
 
                 #{<<"action">> := <<"restart">>,
                   <<"params">> := #{<<"node">> := A}} ->
@@ -365,6 +372,9 @@ process_post(RD, Context) ->
                 {true, ResF(<<"node is up">>), Context};
             {error, bad_config} ->
                 {true, ResF(<<"bad config">>), Context};
+            {error, PoorlyUnderstoodReason} ->
+                ?LOG_WARNING("Error serving cluster request ~p: ~p", [Action, PoorlyUnderstoodReason]),
+                {{halt, 400}, ResF(<<"unexpected error condition">>), Context};
             {badrpc, nodedown} ->
                 {{halt, 412}, ResF(<<"node is down">>), Context}
         end
@@ -393,6 +403,20 @@ apply_app_env2(Node, AppEE, Persist) when Node == node() ->
     riak_kv_util:apply_app_env(AppEE, Persist);
 apply_app_env2(Node, AppEE, Persist) ->
     rpc:call(Node, riak_kv_util, apply_app_env, [AppEE, Persist]).
+
+write_advanced_config(Node, Blob) ->
+    case erl_parse:parse_term(
+           element(2, erl_scan:string(
+                        binary_to_list(Blob) ++ "."))) of
+        {ok, EE} when is_list(EE) ->
+            write_advanced_config2(Node, Blob);
+        _ ->
+            {error, bad_config}
+    end.
+write_advanced_config2(Node, Blob) when Node == node() ->
+    riak_kv_util:write_advanced_config2(Blob);
+write_advanced_config2(Node, Blob) ->
+    rpc:call(Node, riak_kv_util, write_advanced_config, [Blob]).
 
 
 signal_restart(Node) when Node == node() ->
