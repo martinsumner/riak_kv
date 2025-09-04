@@ -319,20 +319,22 @@ process_post(RD, Context) ->
                             {badrpc, nodedown}
                     end;
 
-                #{<<"action">> := <<"get_config">>,
+                #{<<"action">> := <<"get_app_env">>,
                   <<"params">> := #{<<"node">> := A}} ->
                     AllAppEnvs = collect_app_env(binary_to_atom(A)),
                     {ok, iolist_to_binary(io_lib:format("~120p", [AllAppEnvs]))};
-                #{<<"action">> := <<"put_config">>,
+                #{<<"action">> := <<"put_app_env">>,
                   <<"params">> := #{<<"node">> := A,
-                                    <<"config">> := B,
-                                    <<"persist">> := C,
-                                    <<"replace">> := D}} ->
-                    if D == true ->
-                            write_advanced_config(binary_to_atom(A), B);
-                       el/=se ->
-                            apply_app_env(binary_to_atom(A), B, C)
-                    end;
+                                    <<"config">> := B}} ->
+                    apply_app_env(binary_to_atom(A), B);
+                #{<<"action">> := <<"get_advanced_config">>,
+                  <<"params">> := #{<<"node">> := A}} ->
+                    {ok, AdvConfig} = get_advanced_config(binary_to_atom(A)),
+                    {ok, iolist_to_binary(io_lib:format("~120p", [AdvConfig]))};
+                #{<<"action">> := <<"put_advanced_config">>,
+                  <<"params">> := #{<<"node">> := A,
+                                    <<"config">> := B}} ->
+                    write_advanced_config(binary_to_atom(A), B);
 
                 #{<<"action">> := <<"restart">>,
                   <<"params">> := #{<<"node">> := A}} ->
@@ -389,32 +391,37 @@ collect_app_env(Node) when Node == node() ->
 collect_app_env(Node) ->
     rpc:call(Node, riak_kv_util, collect_all_app_env, []).
 
-apply_app_env(Node, AppEE_s, Persist) ->
+apply_app_env(Node, AppEE_s) ->
     case erl_parse:parse_term(
            element(2, erl_scan:string(
                         binary_to_list(AppEE_s) ++ "."))) of
         {ok, AppEE} ->
-            apply_app_env2(Node, AppEE, Persist);
+            apply_app_env2(Node, AppEE);
         {error, _e} ->
             ?LOG_WARNING("malformed term: ~p", [_e]),
             {error, bad_config}
     end.
-apply_app_env2(Node, AppEE, Persist) when Node == node() ->
-    riak_kv_util:apply_app_env(AppEE, Persist);
-apply_app_env2(Node, AppEE, Persist) ->
-    rpc:call(Node, riak_kv_util, apply_app_env, [AppEE, Persist]).
+apply_app_env2(Node, AppEE) when Node == node() ->
+    riak_kv_util:apply_app_env(AppEE);
+apply_app_env2(Node, AppEE) ->
+    rpc:call(Node, riak_kv_util, apply_app_env, [AppEE]).
+
+get_advanced_config(Node) when Node == node() ->
+    riak_kv_util:get_advanced_config();
+get_advanced_config(Node) ->
+    rpc:call(Node, riak_kv_util, get_advanced_config, []).
 
 write_advanced_config(Node, Blob) ->
     case erl_parse:parse_term(
            element(2, erl_scan:string(
                         binary_to_list(Blob) ++ "."))) of
         {ok, EE} when is_list(EE) ->
-            write_advanced_config2(Node, Blob);
+            write_advanced_config2(Node, iolist_to_binary([Blob, $.]));
         _ ->
             {error, bad_config}
     end.
 write_advanced_config2(Node, Blob) when Node == node() ->
-    riak_kv_util:write_advanced_config2(Blob);
+    riak_kv_util:write_advanced_config(Blob);
 write_advanced_config2(Node, Blob) ->
     rpc:call(Node, riak_kv_util, write_advanced_config, [Blob]).
 

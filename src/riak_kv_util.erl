@@ -59,7 +59,8 @@
         node_info_for_riak_control/0,
         system_info/0,
         collect_all_app_env/0,
-        apply_app_env/2,
+        apply_app_env/1,
+        get_advanced_config/0,
         write_advanced_config/1
         ]).
 -export([report_hashtree_tokens/0, reset_hashtree_tokens/2]).
@@ -885,7 +886,7 @@ s(_) -> "s".
 riak_version() ->
     element(2, lists:keyfind("riak", 1, release_handler:which_releases())).
 
--spec collect_all_app_env() -> proplists:proplists().
+-spec collect_all_app_env() -> proplists:proplist().
 collect_all_app_env() ->
     Apps = [A || {A, _, _} <- application:which_applications()],
     lists:filter(
@@ -893,48 +894,55 @@ collect_all_app_env() ->
       [{App, application:get_all_env(App)} || App <- Apps]
      ).
 
--spec apply_app_env(proplists:proplist(), Persist::boolean()) -> ok.
-apply_app_env(AppEE, false) ->
+-spec apply_app_env(proplists:proplist()) -> ok.
+apply_app_env(AppEE) ->
     lists:map(
       fun({App, EE}) ->
               [application:set_env(App, K, V) || {K, V} <- EE]
       end,
       AppEE),
-    ok;
-apply_app_env(AppEE0, true) ->
-    apply_app_env(AppEE0, false),
-    AppEE9 = merge_app_envs(
-               collect_all_app_env(), AppEE0),
-    write_advanced_config(
-      io_lib:format("~p.\n", [AppEE9])).
+    ok.
 
-merge_app_envs(Base, Extra) ->
-    lists:foldl(
-      fun({App, EE}, Q) ->
-              case lists:keyfind(App, 1, Q) of
-                  false ->
-                      [{App, EE} | Q];
-                  {_, EE0} ->
-                      AppEE2 =
-                          lists:foldl(
-                            fun({K, V}, Q2) -> lists:keystore(K, 1, Q2, {K, V}) end,
-                            EE0, EE),
-                      lists:keyreplace(App, 1, Q, {App, AppEE2})
-              end
-      end,
-      Base,
-      Extra).
+%% merge_app_envs(Base, Extra) ->
+%%     lists:foldl(
+%%       fun({App, EE}, Q) ->
+%%               case lists:keyfind(App, 1, Q) of
+%%                   false ->
+%%                       [{App, EE} | Q];
+%%                   {_, EE0} ->
+%%                       AppEE2 =
+%%                           lists:foldl(
+%%                             fun({K, V}, Q2) -> lists:keystore(K, 1, Q2, {K, V}) end,
+%%                             EE0, EE),
+%%                       lists:keyreplace(App, 1, Q, {App, AppEE2})
+%%               end
+%%       end,
+%%       Base,
+%%       Extra).
 
--spec write_advanced_config(iolist()) -> ok | {error, file:posix() | badarg | terminated | system_limit}.
+-spec get_advanced_config() ->
+          {ok, proplists:proplist()} | {error, bad_config | file:posix() | badarg | terminated | system_limit}.
+get_advanced_config() ->
+    case file:consult(which_advanced_config()) of
+        {error, {_Line, _Mod, _Term} = FE} ->
+            ?LOG_WARNING("advanced.config is not consultable: ~s", [file:format_error(FE)]),
+            {error, bad_config};
+        Other ->
+            Other
+    end.
+
+-spec write_advanced_config(iolist()|binary()) ->
+          ok | {error, file:posix() | badarg | terminated | system_limit}.
 write_advanced_config(Blob) ->
-    FN =
-        case os:getenv("USER") of
-            "riak" ->
-                "/etc/riak/advanced.config";
-            _ ->
-                "etc/advanced.config"
-        end,
-    file:write_file(FN, Blob).
+    file:write_file(which_advanced_config(), Blob).
+
+which_advanced_config() ->
+    case os:getenv("USER") of
+        "riak" ->
+            "/etc/riak/advanced.config";
+        _ ->
+            "etc/advanced.config"
+    end.
 
 %% ===================================================================
 %% EUnit tests
@@ -942,16 +950,16 @@ write_advanced_config(Blob) ->
 
 -ifdef(TEST).
 
-merge_app_envs_test() ->
-    [{app1, [{a, 1}, {b, 2}]},
-     {app2, [{a, 3}, {b, 4}]}] =
-        merge_app_envs([{app1, [{a, 1}, {b, 2}]}],
-                       [{app2, [{a, 3}, {b, 4}]}]),
-    [{app1, [{a, 1}, {b, 2}]},
-     {app2, [{a, 3}, {b, 4}]}] =
-        merge_app_envs([{app1, [{a, 1}, {b, 2}]}, {app2, [{a, not3}, {b, not4}]}],
-                       [{app2, [{a, 3}, {b, 4}]}]),
-    true.
+%% merge_app_envs_test() ->
+%%     [{app1, [{a, 1}, {b, 2}]},
+%%      {app2, [{a, 3}, {b, 4}]}] =
+%%         lists:keysort(1, merge_app_envs([{app1, [{a, 1}, {b, 2}]}],
+%%                                         [{app2, [{a, 3}, {b, 4}]}])),
+%%     [{app1, [{a, 1}, {b, 2}]},
+%%      {app2, [{a, 3}, {b, 4}]}] =
+%%         lists:keysort(1, merge_app_envs([{app1, [{a, 1}, {b, 2}]}, {app2, [{a, not3}, {b, not4}]}],
+%%                                         [{app2, [{a, 3}, {b, 4}]}])),
+%%     true.
 
 normalize_test() ->
     3 = normalize_rw_value(3, 3),
