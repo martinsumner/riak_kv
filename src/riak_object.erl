@@ -94,7 +94,7 @@
 -export([hash/1, hash/2, hash/4, approximate_size/2, proxy_size/1]).
 -export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
 -export([encode_vclock/2, decode_vclock/2]).
--export([update/5, update_value/2, update_metadata/2, bucket/1, bucket_only/1, type/1, value_count/1]).
+-export([update/7, update_value/2, update_metadata/2, bucket/1, bucket_only/1, type/1, value_count/1]).
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
 -export([merge/2, apply_updates/1, syntactic_merge/2]).
 -export([to_json/1, from_json/1]).
@@ -440,6 +440,16 @@ compare_content_dates(C1,C2) ->
             C1 < C2
     end.
 
+
+-spec merge(riak_object(), riak_object()) -> riak_object().
+merge(OldObject, NewObject) ->
+    Bucket = bucket(OldObject),
+    merge(
+        OldObject,
+        NewObject,
+        riak_kv_util:get_write_once(Bucket),
+        dvv_enabled(Bucket)).
+
 %% @doc  Merge the contents and vclocks of OldObject and NewObject.
 %%       Note: This function calls apply_updates on NewObject.
 %%       Depending on whether DVV is enabled or not, then may merge
@@ -448,17 +458,15 @@ compare_content_dates(C1,C2) ->
 %%       merge, this is also now a semantic merge for CRDTs.  Only
 %%       call with concurrent objects. Use `syntactic_merge/2' if one
 %%       object may strictly dominate another.
--spec merge(riak_object(), riak_object()) -> riak_object().
-merge(OldObject=#r_object{}, NewObject=#r_object{}) ->
+-spec merge(riak_object(), riak_object(), boolean(), boolean()) -> riak_object().
+merge(OldObject=#r_object{}, NewObject=#r_object{}, WriteOnce, DVV) ->
     NewObj1 = apply_updates(NewObject),
-    Bucket = bucket(OldObject),
-    case riak_kv_util:get_write_once(Bucket) of
+    case WriteOnce of
         true ->
             merge_write_once(OldObject, NewObj1);
         _ ->
-            DVV = dvv_enabled(Bucket),
-            {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3,
-                                                 [NewObject, OldObject, DVV]),
+            {Time,  {CRDT, Contents}} =
+                timer:tc(fun merge_contents/3, [NewObject, OldObject, DVV]),
             ok = riak_kv_stat:update({riak_object_merge, CRDT, Time}),
             OldObject#r_object{contents=Contents,
                 vclock=vclock:merge([OldObject#r_object.vclock,
@@ -950,12 +958,18 @@ increment_vclock(Object=#r_object{bucket=B}, ClientId) ->
 %% @doc  Increment the entry for ClientId in O's vclock.
 -spec increment_vclock(riak_object(), vclock:vclock_node(), vclock:timestamp()) -> riak_object().
 increment_vclock(Object=#r_object{bucket=B}, ClientId, Timestamp) ->
+    increment_vclock(Object, ClientId, Timestamp, dvv_enabled(B)).
+
+-spec increment_vclock(
+    riak_object(), vclock:vclock_node(), vclock:timestamp(), boolean())
+        -> riak_object().
+increment_vclock(Object, ClientId, Timestamp, DVV) ->
     NewClock = vclock:increment(ClientId, Timestamp, Object#r_object.vclock),
     {ok, Dot} = vclock:get_dot(ClientId, NewClock),
     %% If it is true that we only ever increment the vclock to create
     %% a frontier object, then there must only ever be a single value
     %% when we increment, so add the dot here.
-    assign_dot(Object#r_object{vclock=NewClock}, Dot, dvv_enabled(B)).
+    assign_dot(Object#r_object{vclock=NewClock}, Dot, DVV).
 
 %% @doc Prune vclock
 -spec prune_vclock(riak_object(), vclock:timestamp(), [proplists:property()]) ->
@@ -1100,16 +1114,18 @@ is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
             end
     end.
 
-%% @doc a Put merge. Update a stored riak_object with the value from a
-%% new riak_object that has been put. Must be serialised by the
-%% `Actor' provided.
--spec update(LWW :: boolean(), LocalObj :: riak_object(),
-             NewObj :: riak_object(), Actor ::vclock:vclock_node(),
-             TimeStamp :: vclock:timestamp()) ->
-                    riak_object().
-update(true, _OldObject, NewObject=#r_object{}, Actor, Timestamp) ->
-    increment_vclock(NewObject, Actor, Timestamp);
-update(false, OldObject=#r_object{}, NewObject=#r_object{}, Actor, Timestamp) ->
+-spec update(
+    LWW :: boolean(),
+    LocalObj :: riak_object(),
+    NewObj :: riak_object(),
+    Actor ::vclock:vclock_node(),
+    TimeStamp :: vclock:timestamp(),
+    WriteOnce ::boolean(),
+    DVV :: boolean()) ->
+        riak_object().
+update(true, _OldObject, NewObject=#r_object{}, Actor, Timestamp, _WriteOnce, DVV) ->
+    increment_vclock(NewObject, Actor, Timestamp, DVV);
+update(false, OldObject=#r_object{}, NewObject=#r_object{}, Actor, Timestamp, WriteOnce, DVV) ->
     %% Get the vclock we have for the local / old object
     LocalVC = vclock(OldObject),
     %% get the vclock from the new object
@@ -1120,7 +1136,7 @@ update(false, OldObject=#r_object{}, NewObject=#r_object{}, Actor, Timestamp) ->
     %% clock and overwrite.
     case vclock:descends(PutVC, LocalVC) of
         true ->
-            increment_vclock(NewObject, Actor, Timestamp);
+            increment_vclock(NewObject, Actor, Timestamp, DVV);
         false ->
             %% The new object is concurrent with some other value, so
             %% merge the new object and the old object.
@@ -1128,9 +1144,8 @@ update(false, OldObject=#r_object{}, NewObject=#r_object{}, Actor, Timestamp) ->
             FrontierClock = vclock:increment(Actor, Timestamp, MergedClock),
             {ok, Dot} = vclock:get_dot(Actor, FrontierClock),
             %% Assign an event to the new value
-            Bucket = bucket(OldObject),
-            DottedPutObject = assign_dot(NewObject, Dot, dvv_enabled(Bucket)),
-            MergedObject = merge(DottedPutObject, OldObject),
+            DottedPutObject = assign_dot(NewObject, Dot, DVV),
+            MergedObject = merge(DottedPutObject, OldObject, WriteOnce, DVV),
             set_vclock(MergedObject, FrontierClock)
     end.
 
@@ -1150,7 +1165,8 @@ syntactic_merge(CurrentObject, NewObject) ->
                   end,
 
     case ancestors([UpdatedCurr, UpdatedNew]) of
-        [] -> merge(UpdatedCurr, UpdatedNew);
+        [] ->
+            merge(UpdatedCurr, UpdatedNew);
         [Ancestor] ->
             case equal(Ancestor, UpdatedCurr) of
                 true  -> UpdatedNew;

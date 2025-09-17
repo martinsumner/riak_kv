@@ -100,7 +100,7 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("riak_core/include/riak_core_bg_manager.hrl").
--export([put_merge/6]). %% For fsm_eqc_vnode
+-export([put_merge/8]). %% For fsm_eqc_vnode
 -endif.
 
 -record(mrjob, {cachekey :: term(),
@@ -2835,19 +2835,21 @@ do_put(Sender, Request, State) ->
 %% @private
 %% upon receipt of a client-initiated put
 do_put(Sender, {Bucket, _Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
-    BProps =  case proplists:get_value(bucket_props, Options) of
-                  undefined ->
-                      riak_core_bucket:get_bucket(Bucket);
-                  Props ->
-                      Props
-              end,
+    BProps =
+        case proplists:get_value(bucket_props, Options) of
+            undefined ->
+                riak_core_bucket:get_bucket(Bucket);
+            Props ->
+                Props
+        end,
     ReadRepair = proplists:get_value(rr, Options, false),
-    PruneTime = case ReadRepair of
-                    true ->
-                        undefined;
-                    false ->
-                        StartTime
-                end,
+    PruneTime =
+        case ReadRepair of
+            true ->
+                undefined;
+            false ->
+                StartTime
+        end,
     Coord = proplists:get_value(coord, Options, false),
     SyncOnWrite = proplists:get_value(sync_on_write, Options, undefined),
     CRDTOp = proplists:get_value(counter_op, Options, proplists:get_value(crdt_op, Options, undefined)),
@@ -3014,7 +3016,9 @@ prepare_put_existing_object(#state{idx =Idx} = State,
                              crdt_op = CRDTOp}=PutArgs,
                             OldObj, IndexBackend, CacheData, RequiresGet) ->
     {IsNewEpoch, ActorId, State2} = maybe_new_key_epoch(Coord, State, OldObj, RObj),
-    case put_merge(Coord, LWW, OldObj, RObj, {IsNewEpoch, ActorId}, StartTime) of
+    DVV = proplists:get_value(dvv_enabled, BProps, true),
+    WriteOnce = proplists:get_value(write_once, BProps, true),
+    case put_merge(Coord, LWW, OldObj, RObj, {IsNewEpoch, ActorId}, StartTime, WriteOnce, DVV) of
         {oldobj, OldObj} ->
             {{false, {OldObj, unchanged_no_old_object}}, PutArgs, State2};
         {newobj, NewObj} ->
@@ -3324,9 +3328,9 @@ select_newest_content(Mult) ->
          Mult)).
 
 %% @private
-put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=true
+put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime, _WO, _DVV) -> % coord=false, LWW=true
     {newobj, UpdObj};
-put_merge(false, false, CurObj, UpdObj, {NewEpoch, VId}, _StartTime) -> % coord=false, LWW=false
+put_merge(false, false, CurObj, UpdObj, {NewEpoch, VId}, _StartTime, _WO, _DVV) -> % coord=false, LWW=false
     %% a downstream merge, or replication of a coordinated PUT
     %% Merge the value received with local replica value
     %% and store the value IFF it is different to what we already have
@@ -3342,8 +3346,8 @@ put_merge(false, false, CurObj, UpdObj, {NewEpoch, VId}, _StartTime) -> % coord=
                     {newobj, ResObj}
             end
     end;
-put_merge(true, LWW, CurObj, UpdObj, {_NewEpoch, VId}, StartTime) ->
-    {newobj, riak_object:update(LWW, CurObj, UpdObj, VId, StartTime)}.
+put_merge(true, LWW, CurObj, UpdObj, {_NewEpoch, VId}, StartTime, WO, DVV) ->
+    {newobj, riak_object:update(LWW, CurObj, UpdObj, VId, StartTime, WO, DVV)}.
 
 %% @private
 do_get(_Sender, BKey, ReqID,

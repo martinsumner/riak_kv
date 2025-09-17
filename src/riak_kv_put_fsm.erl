@@ -26,7 +26,6 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
--include_lib("riak_kv_vnode.hrl").
 -include("riak_kv_types.hrl").
 -include("riak_kv_capability.hrl").
 
@@ -36,8 +35,7 @@
 
 -behaviour(gen_fsm).
 -define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
--export([start/3,start/6,start/7]).
--export([start_link/3,start_link/6,start_link/7]).
+-export([start/3]).
 -export([set_put_coordinator_failure_timeout/1,
          get_put_coordinator_failure_timeout/0]).
 -ifdef(TEST).
@@ -48,7 +46,7 @@
 -export([prepare/2, validate/2, precommit/2,
          waiting_local_vnode/2,
          waiting_remote_vnode/2,
-         postcommit/2, finish/2]).
+         postcommit/2, finish/2, abort/2]).
 -export([conditional_check/3]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -146,37 +144,34 @@
 %% Public API
 %% ===================================================================
 
-%% In place only for backwards compatibility
-start(ReqId,RObj,W,DW,Timeout,ResultPid) ->
-    start_link(ReqId,RObj,W,DW,Timeout,ResultPid,[]).
-
-%% In place only for backwards compatibility
-start(ReqId,RObj,W,DW,Timeout,ResultPid,Options) ->
-    start_link(ReqId,RObj,W,DW,Timeout,ResultPid,Options).
-
-start_link(ReqId,RObj,W,DW,Timeout,ResultPid) ->
-    start_link(ReqId,RObj,W,DW,Timeout,ResultPid,[]).
-
-start_link(ReqId,RObj,W,DW,Timeout,ResultPid,Options) ->
-    start({raw, ReqId, ResultPid}, RObj, [{w, W}, {dw, DW}, {timeout, Timeout} | Options]).
-
-start(From, Object, PutOptions) ->
-    Args = [From, Object, PutOptions],
-    case sidejob_supervisor:start_child(riak_kv_put_fsm_sj,
-                                        gen_fsm, start_link,
-                                        [?MODULE, Args, []]) of
-        {error, overload} ->
-            riak_kv_util:overload_reply(From),
-            {error, overload};
-        {ok, Pid} ->
-            {ok, Pid}
+-spec start(
+    {raw, non_neg_integer(), pid()},
+    riak_object:object(),
+    proplist:proplist()) ->
+        consistent|write_once|{ok, pid()}|{error, overload}.
+start(From, RObj, PutOptions) ->
+    Bucket = riak_object:bucket(RObj),
+    BucketProps = get_bucket_props(Bucket),
+    case {lists:member({consistent, true}, BucketProps),
+            lists:member({write_once, true}, BucketProps)} of
+        {true, _} ->
+            consistent;
+        {false, true} ->
+            write_once;
+        _ ->
+            Args = [From, RObj, PutOptions, Bucket, BucketProps],
+            StartSideJob =
+                sidejob_supervisor:start_child(
+                    riak_kv_put_fsm_sj, gen_fsm, start_link, [?MODULE, Args, []]
+                ), 
+            case StartSideJob of
+                {error, overload} ->
+                    riak_kv_util:overload_reply(From),
+                    {error, overload};
+                {ok, Pid} ->
+                    {ok, Pid}
+            end
     end.
-
-%% Included for backward compatibility, in case someone is, say, passing around
-%% a riak_client instace between nodes during a rolling upgrade. The old
-%% `start_link' function has been renamed `start' since it doesn't actually link
-%% to the caller.
-start_link(From, Object, PutOptions) -> start(From, Object, PutOptions).
 
 set_put_coordinator_failure_timeout(MS) when is_integer(MS), MS >= 0 ->
     application:set_env(riak_kv, put_coordinator_failure_timeout, MS);
@@ -248,7 +243,13 @@ monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, StateData) ->
 %%
 %% As test, but linked to the caller
 test_link(From, Object, PutOptions, StateProps) ->
-    gen_fsm:start_link(?MODULE, {test, [From, Object, PutOptions], StateProps}, []).
+    Bucket = riak_object:bucket(Object),
+    BucketProps = get_bucket_props(Bucket),
+    gen_fsm:start_link(
+        ?MODULE,
+        {test, [From, Object, PutOptions, Bucket, BucketProps], StateProps},
+        []
+    ).
 
 -endif.
 
@@ -258,18 +259,23 @@ test_link(From, Object, PutOptions, StateProps) ->
 %% ====================================================================
 
 %% @private
-init([From, RObj, Options0]) ->
-    BKey = {Bucket, Key} = {riak_object:bucket(RObj), riak_object:key(RObj)},
+init([From, RObj, Options0, Bucket, BucketProps]) ->
+    Key = riak_object:key(RObj),
     CoordTimeout = get_put_coordinator_failure_timeout(),
     Trace = app_helper:get_env(riak_kv, fsm_trace_enabled),
     Options = proplists:unfold(Options0),
-    StateData = #state{from = From,
-                       robj = RObj,
-                       bkey = BKey,
-                       trace = Trace,
-                       options = Options,
-                       timing = riak_kv_fsm_timing:add_timing(prepare, []),
-                       coordinator_timeout=CoordTimeout},
+    StateData =
+        #state{
+            from = From,
+            robj = RObj,
+            bkey = {Bucket, Key},
+            trace = Trace,
+            options = Options,
+            timing = riak_kv_fsm_timing:add_timing(prepare, []),
+            coordinator_timeout=CoordTimeout,
+            bucket_props = BucketProps
+        },
+    gen_fsm:send_event(self(), timeout),
     case Trace of
         true ->
             riak_core_dtrace:put_tag([Bucket, $,, Key]),
@@ -285,7 +291,6 @@ init([From, RObj, Options0]) ->
         _ ->
             ok
     end,
-    gen_fsm:send_event(self(), timeout),
     {ok, prepare, StateData};
 init({test, Args, StateProps}) ->
     %% Call normal init
@@ -304,10 +309,18 @@ init({test, Args, StateProps}) ->
     %% state of the rest of the system
     {ok, validate, TestStateData}.
 
+abort(timeout, StateData) ->
+    {stop, normal, StateData}.
+
 %% @private
-prepare(timeout, State = #state{robj = RObj, options=Options}) ->
-    Bucket = riak_object:bucket(RObj),
-    BucketProps = get_bucket_props(Bucket),
+prepare(
+        timeout,
+        State=#state{
+            bkey = {Bucket, Key},
+            options=Options,
+            bucket_props=BucketProps
+        }
+    ) ->
     StatTracked = get_option(stat_tracked, BucketProps, false),
     N = get_n_val(Options, BucketProps),
     ConditionCheck = get_option(condition_check, Options, false),
@@ -316,7 +329,6 @@ prepare(timeout, State = #state{robj = RObj, options=Options}) ->
             false ->
                 ok;
             {NotMod, NoneMatch, GetOpts} ->
-                Key = riak_object:key(RObj),
                 {GetCheck, _PutOpts} =
                     riak_kv_put_fsm:conditional_check(
                         riak_client:get(
@@ -334,8 +346,7 @@ prepare(timeout, State = #state{robj = RObj, options=Options}) ->
         ok ->
             get_preflist(
                 N,
-                State#state{
-                    tracked_bucket=StatTracked, bucket_props=BucketProps
+                State#state{tracked_bucket=StatTracked
                 }
             );
         Error ->
@@ -437,25 +448,41 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                     _ ->
                         false
                 end,
-            PutCore = riak_kv_put_core:init(N, W, PW, NodeConfirms, DW,
-                                            AllowMult,
-                                            ReturnBody,
-                                            IdxType),
+            PutCore =
+                riak_kv_put_core:init(
+                    N,
+                    W,
+                    PW,
+                    NodeConfirms,
+                    DW,
+                    AllowMult,
+                    ReturnBody,
+                    IdxType
+                ),
             Options1 = lists:keydelete(sync_on_write, 1, Options),
             Options2 = [{sync_on_write, SyncOnWrite}|Options1],
             Options3 = [{rr, RR}|Options2],
-            VNodeOpts = handle_options(Options3, VNodeOpts0),
-            StateData = StateData0#state{n=N,
-                                         w=W,
-                                         pw=PW, node_confirms=NodeConfirms, dw=DW,
-                                         allowmult=AllowMult,
-                                         precommit = Precommit,
-                                         postcommit = Postcommit,
-                                         req_id = ReqId,
-                                         robj = RObj,
-                                         putcore = PutCore,
-                                         vnode_options = VNodeOpts,
-                                         timeout = Timeout},
+            VNodeOpts =
+                handle_options(
+                    Options3,
+                    [{bucket_props, BucketProps}|VNodeOpts0]
+                ),
+            StateData =
+                StateData0#state{
+                    n = N,
+                    w = W,
+                    pw = PW,
+                    node_confirms = NodeConfirms,
+                    dw=DW,
+                    allowmult = AllowMult,
+                    precommit = Precommit,
+                    postcommit = Postcommit,
+                    req_id = ReqId,
+                    robj = RObj,
+                    putcore = PutCore,
+                    vnode_options = VNodeOpts,
+                    timeout = Timeout
+                },
             ?DTRACE(Trace, ?C_PUT_FSM_VALIDATE, [N, W, PW, NodeConfirms, DW], []),
             case Precommit of
                 [] -> % Nothing to run, spare the timing code
