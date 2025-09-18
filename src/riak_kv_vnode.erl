@@ -1099,7 +1099,15 @@ handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
 handle_command({rehash, Bucket, Key}, _, State=#state{mod=Mod, modstate=ModState}) ->
     case do_get_binary(Bucket, Key, Mod, ModState) of
         {ok, Bin, _UpdModState} ->
-            aae_update(Bucket, Key, use_binary, unknown_no_old_object, Bin, State);
+            aae_update(
+                Bucket,
+                Key,
+                use_binary,
+                unknown_no_old_object,
+                Bin,
+                undefined,
+                State
+            );
         _ ->
             %% Make sure hashtree isn't tracking deleted data
             aae_delete(Bucket, Key, confirmed_no_old_object, State)
@@ -1133,9 +1141,15 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
             end,
             case Exists of
                 true ->
-                    aae_update(Bucket, Key, 
-                                RObj, unknown_no_old_object, use_object, 
-                                State);
+                    aae_update(
+                        Bucket,
+                        Key, 
+                        RObj,
+                        unknown_no_old_object,
+                        use_object,
+                        undefined, 
+                        State
+                    );
                 false ->
                     aae_delete(Bucket, Key, confirmed_no_old_object, State)
             end,
@@ -1636,7 +1650,15 @@ handle_request(kv_w1c_put_request, Req, _Sender, State=#state{async_put=false, u
     StartTS = os:timestamp(),
     case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
         {ok, UpModState} ->
-            aae_update(Bucket, Key, use_binary, assumed_no_old_object, EncodedVal, State),
+            aae_update(
+                Bucket,
+                Key,
+                use_binary,
+                assumed_no_old_object,
+                EncodedVal,
+                undefined,
+                State
+            ),
                 % Write once path - and so should be a new object.  If not this
                 % is an application fault
             maybe_update_binary(UpdateHook, Bucket, Key, EncodedVal, put, Idx),
@@ -2617,7 +2639,15 @@ terminate(_Reason, #state{idx=Idx,
 
 handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
             State=#state{idx=Idx, update_hook=UpdateHook}) ->
-    aae_update(Bucket, Key, use_binary, assumed_no_old_object, EncodedVal, State),
+    aae_update(
+        Bucket,
+        Key,
+        use_binary,
+        assumed_no_old_object,
+        EncodedVal,
+        undefined,
+        State
+    ),
         % Write once path - and so should be a new object.  If not this
         % is an application fault
     maybe_update_binary(UpdateHook, Bucket, Key, EncodedVal, put, Idx),
@@ -3069,19 +3099,24 @@ get_index_specs(_IndexedBackend=true, CacheData, RequiresGet, NewObj, OldObj) ->
 get_index_specs(_IndexedBackend=false, _CacheData, _RequiresGet, _NewObj, _OldObj) ->
     [].
 
-prepare_put_new_object(#state{idx =Idx} = State,
-               #putargs{robj = RObj,
-                        coord=Coord,
-                        starttime=StartTime,
-                        crdt_op=CRDTOp} = PutArgs,
-                       IndexBackend) ->
-    IndexSpecs = case IndexBackend of
-                     true ->
-                         riak_object:index_specs(RObj);
-                     false ->
-                         []
-                 end,
-    {EpochId, State2, RObj2} = maybe_update_vclock(Coord, RObj, State, StartTime),
+prepare_put_new_object(
+        #state{idx =Idx} = State,
+        #putargs{
+            robj = RObj,
+            coord=Coord,
+            starttime=StartTime,
+            bprops=BProps,
+            crdt_op=CRDTOp} = PutArgs,
+        IndexBackend) ->
+    IndexSpecs =
+        case IndexBackend of
+            true ->
+                riak_object:index_specs(RObj);
+            false ->
+                []
+        end,
+    DVV = proplists:get_value(dvv_enabled, BProps, true),
+    {EpochId, State2, RObj2} = maybe_update_vclock(Coord, RObj, State, StartTime, DVV),
     RObj3 = maybe_do_crdt_update(Coord, CRDTOp, EpochId, RObj2),
     determine_put_result(RObj3, confirmed_no_old_object, Idx, PutArgs, State2, IndexSpecs, IndexBackend).
 
@@ -3115,17 +3150,25 @@ determine_requires_get(CacheClock, RObj, IsSearchable) ->
 
 %% @Doc in the case that this a co-ordinating put, prepare the object.
 %% NOTE: this is called _only_ when the local object is `notfound'
--spec maybe_update_vclock(Coord::boolean(),
-                          IncomingObject:: riak_object:riak_object(),
-                          #state{},
-                          StartTime::term()) ->
-                                 {EpochId :: binary(),
-                                  #state{},
-                                  Object::riak_object:riak_object()}.
-maybe_update_vclock(Coord=true, RObj, State, StartTime) ->
+-spec maybe_update_vclock(
+    Coord::boolean(),
+    IncomingObject:: riak_object:riak_object(),
+    #state{},
+    StartTime::term(),
+    DVV :: boolean()) ->
+        {
+            EpochId :: binary(),
+            #state{},
+            Object::riak_object:riak_object()
+        }.
+maybe_update_vclock(Coord=true, RObj, State, StartTime, DVV) ->
     {_IsNewEpoch, EpochId, State2} = maybe_new_key_epoch(Coord, State, undefined, RObj),
-    {EpochId, State2, riak_object:increment_vclock(RObj, EpochId, StartTime)};
-maybe_update_vclock(_Coord=false, RObj, State, _StartTime) ->
+    {
+        EpochId,
+        State2,
+        riak_object:increment_vclock(RObj, EpochId, StartTime, DVV)
+    };
+maybe_update_vclock(_Coord=false, RObj, State, _StartTime, _DVV) ->
     %% @see maybe_new_actor_epoch/2 for details as to why the vclock
     %% may be updated on a non-coordinating put
     maybe_new_actor_epoch(RObj, State).
@@ -3160,14 +3203,18 @@ perform_put({false, {_Obj, _OldObj}},
     {{dw, Idx, ReqId}, State};
 perform_put({true, {_Obj, _OldObj}=Objects},
             State,
-            #putargs{returnbody=RB,
-                     bkey=BKey,
-                     reqid=ReqID,
-                     coord=Coord,
-                     index_specs=IndexSpecs,
-                     readrepair=ReadRepair,
-                     sync_on_write=SyncOnWrite,
-                     reason=HookReason}) ->
+            #putargs{
+                returnbody=RB,
+                bkey=BKey,
+                reqid=ReqID,
+                coord=Coord,
+                index_specs=IndexSpecs,
+                readrepair=ReadRepair,
+                sync_on_write=SyncOnWrite,
+                reason=HookReason,
+                bprops = BucketProps
+            }
+        ) ->
     case ReadRepair of
       true ->
         MaxCheckFlag = no_max_check;
@@ -3191,13 +3238,13 @@ perform_put({true, {_Obj, _OldObj}=Objects},
     {Reply, State2} =
         actual_put(
             BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag,
-            {Coord, Sync}, HookReason, State),
+            {Coord, Sync}, HookReason, BucketProps, State),
     {Reply, State2}.
 
 actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, State) ->
     actual_put(
         BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, do_max_check,
-        {false, false}, put, State).
+        {false, false}, put, undefined, State).
 
 actual_put(BKey={Bucket, Key},
             {Obj, OldObj},
@@ -3206,6 +3253,7 @@ actual_put(BKey={Bucket, Key},
             MaxCheckFlag,
             {Coord, Sync},
             HookReason,
+            BucketProps,
             State=#state{idx=Idx,
                             mod=Mod,
                             modstate=ModState,
@@ -3213,7 +3261,9 @@ actual_put(BKey={Bucket, Key},
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                        MaxCheckFlag, Sync) of
         {{ok, UpdModState}, EncodedVal} ->
-            aae_update(Bucket, Key, Obj, OldObj, EncodedVal, State),
+            aae_update(
+                Bucket, Key, Obj, OldObj, EncodedVal, BucketProps, State
+            ),
             nextgenrepl(Bucket, Key, Obj, size(EncodedVal),
                         Coord,
                         State#state.enable_nextgenreplsrc,
@@ -3330,11 +3380,11 @@ select_newest_content(Mult) ->
 %% @private
 put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime, _WO, _DVV) -> % coord=false, LWW=true
     {newobj, UpdObj};
-put_merge(false, false, CurObj, UpdObj, {NewEpoch, VId}, _StartTime, _WO, _DVV) -> % coord=false, LWW=false
+put_merge(false, false, CurObj, UpdObj, {NewEpoch, VId}, _StartTime, WO, DVV) -> % coord=false, LWW=false
     %% a downstream merge, or replication of a coordinated PUT
     %% Merge the value received with local replica value
     %% and store the value IFF it is different to what we already have
-    ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
+    ResObj = riak_object:syntactic_merge(CurObj, UpdObj, {WO, DVV}),
     case NewEpoch of
         true ->
             {newobj, riak_object:new_actor_epoch(ResObj, VId)};
@@ -3835,20 +3885,23 @@ nextgenrepl(_B, _K, _Obj, _Size, _Coord, _Enabled, _Limit) ->
     ok.
 
 
--spec aae_update(binary(), binary(),
-                    riak_object:riak_object()|none|undefined|use_binary,
-                    old_object(),
-                    binary()|use_object, 
-                        % cannot be use_object if object is use_binary
-                    state()) -> ok.
+-spec aae_update(
+    binary(), binary(),
+    riak_object:riak_object()|none|undefined|use_binary,
+    old_object(),
+    binary()|use_object, 
+        % cannot be use_object if object is use_binary
+    proplist:proplist() | undefined,
+    state())
+        -> ok.
 %% @doc
 %% Update both the AAE controller (tictac aae) and old school hashtree aae
 %% if either or both are enabled.
-aae_update(_Bucket, _Key, _UpdObj, _PrevObj, _UpdObjBin,
+aae_update(_Bucket, _Key, _UpdObj, _PrevObj, _UpdObjBin, _BucketProps,
             #state{hashtrees = HTs, tictac_aae = TAAE} = _State) 
             when HTs == undefined, TAAE == false ->
     ok;
-aae_update(Bucket, Key, UpdObj, PrevObj, UpdObjBin,
+aae_update(Bucket, Key, UpdObj, PrevObj, UpdObjBin, BucketProps,
             #state{hashtrees = HTs, tictac_aae = TAAE} = State) ->
     Async = async_aae(State#state.aae_tokenbucket),
     case HTs of 
@@ -3880,7 +3933,13 @@ aae_update(Bucket, Key, UpdObj, PrevObj, UpdObjBin,
                         get_clock(UpdObj)
                 end,
             PrevClock = get_clock(PrevObj),
-            IndexN = riak_kv_util:get_index_n({Bucket, Key}),
+            IndexN =
+                case BucketProps of
+                    undefined ->
+                        riak_kv_util:get_index_n({Bucket, Key});
+                    BucketProps when is_list(BucketProps) ->
+                        riak_kv_util:get_index_n({Bucket, Key}, BucketProps)
+                end,
             ObjBin = 
                 case UpdObjBin of 
                     use_object ->

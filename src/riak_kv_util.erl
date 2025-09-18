@@ -35,6 +35,7 @@
         normalize_rw_value/2,
         make_request/2,
         get_index_n/1,
+        get_index_n/2,
         preflist_siblings/1,
         fix_incorrect_index_entries/1,
         fix_incorrect_index_entries/0,
@@ -358,6 +359,10 @@ reset_aae_key_filter() ->
 -spec get_index_n({binary(), binary()}) -> index_n().
 get_index_n({Bucket, Key}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
+    get_index_n({Bucket, Key}, BucketProps).
+
+-spec get_index_n({binary(), binary()}, proplist:proplist()) -> index_n().
+get_index_n({Bucket, Key}, BucketProps) ->
     N = proplists:get_value(n_val, BucketProps),
     ChashKey = riak_core_util:chash_key({Bucket, Key}, BucketProps),
     {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
@@ -761,7 +766,7 @@ profile_riak(ProfileTime) ->
             case eprof:stop_profiling() of
                 profiling_stopped ->
                     eprof:analyze(
-                        total, [{filter, [{time, float(5 * ProfileTime)}]}]
+                        total, [{filter, [{time, float(8 * ProfileTime)}]}]
                     ),
                     stopped = eprof:stop(),
                     analyzed;

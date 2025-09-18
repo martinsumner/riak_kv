@@ -88,7 +88,8 @@
 -define(EMPTY_VTAG_BIN, <<"e">>).
 
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2, remove_dominated/1]).
--export([increment_vclock/2, increment_vclock/3, prune_vclock/3, vclock_descends/2, all_actors/1]).
+-export([increment_vclock/2, increment_vclock/3, increment_vclock/4]).
+-export([prune_vclock/3, vclock_descends/2, all_actors/1]).
 -export([actor_counter/2]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1, get_dotted_values/1]).
 -export([hash/1, hash/2, hash/4, approximate_size/2, proxy_size/1]).
@@ -96,7 +97,7 @@
 -export([encode_vclock/2, decode_vclock/2]).
 -export([update/7, update_value/2, update_metadata/2, bucket/1, bucket_only/1, type/1, value_count/1]).
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
--export([merge/2, apply_updates/1, syntactic_merge/2]).
+-export([merge/2, apply_updates/1, syntactic_merge/2, syntactic_merge/3]).
 -export([to_json/1, from_json/1]).
 -export([index_data/1, diff_index_data/2]).
 -export([index_specs/1, diff_index_specs/2]).
@@ -1151,6 +1152,12 @@ update(false, OldObject=#r_object{}, NewObject=#r_object{}, Actor, Timestamp, Wr
 
 -spec syntactic_merge(riak_object(), riak_object()) -> riak_object().
 syntactic_merge(CurrentObject, NewObject) ->
+    syntactic_merge(CurrentObject, NewObject, undefined).
+
+-spec syntactic_merge(
+    riak_object(), riak_object(), {boolean(), boolean()}|undefined)
+    -> riak_object().
+syntactic_merge(CurrentObject, NewObject, Flags) ->
     %% Paranoia in case objects were incorrectly stored
     %% with update information.  Vclock is not updated
     %% but since no data is lost the objects will be
@@ -1164,10 +1171,12 @@ syntactic_merge(CurrentObject, NewObject) ->
                       false -> CurrentObject
                   end,
 
-    case ancestors([UpdatedCurr, UpdatedNew]) of
-        [] ->
+    case {ancestors([UpdatedCurr, UpdatedNew]), Flags} of
+        {[], undefined} ->
             merge(UpdatedCurr, UpdatedNew);
-        [Ancestor] ->
+        {[], {WriteOnce, DVVEnabled}} ->
+            merge(UpdatedCurr, UpdatedNew, WriteOnce, DVVEnabled);
+        {[Ancestor], _} ->
             case equal(Ancestor, UpdatedCurr) of
                 true  -> UpdatedNew;
                 false -> UpdatedCurr
