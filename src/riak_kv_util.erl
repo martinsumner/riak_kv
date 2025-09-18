@@ -361,7 +361,7 @@ get_index_n({Bucket, Key}) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     get_index_n({Bucket, Key}, BucketProps).
 
--spec get_index_n({binary(), binary()}, proplist:proplist()) -> index_n().
+-spec get_index_n({binary(), binary()}, proplists:proplist()) -> index_n().
 get_index_n({Bucket, Key}, BucketProps) ->
     N = proplists:get_value(n_val, BucketProps),
     ChashKey = riak_core_util:chash_key({Bucket, Key}, BucketProps),

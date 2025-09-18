@@ -3891,7 +3891,7 @@ nextgenrepl(_B, _K, _Obj, _Size, _Coord, _Enabled, _Limit) ->
     old_object(),
     binary()|use_object, 
         % cannot be use_object if object is use_binary
-    proplist:proplist() | undefined,
+    proplists:proplist() | undefined,
     state())
         -> ok.
 %% @doc
