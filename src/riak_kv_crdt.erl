@@ -403,10 +403,10 @@ update_object(RObj, CRDTs, SiblingValues) ->
 
 meta(undefined, ?CRDT{ctype=CType}) ->
     Now = os:timestamp(),
-    M = dict:new(),
-    M2 = dict:store(?MD_LASTMOD, Now, M),
-    M3 = dict:store(?MD_VTAG, riak_kv_util:make_vtag(Now), M2),
-    dict:store(?MD_CTYPE, CType, M3);
+    M = riak_object:metadata_new(),
+    M2 = riak_object:metadata_store(?MD_LASTMOD, Now, M),
+    M3 = riak_object:metadata_store(?MD_VTAG, riak_kv_util:make_vtag(Now), M2),
+    riak_object:metadata_store(?MD_CTYPE, CType, M3);
 meta(Meta, _CRDT) ->
     drop_the_dot(Meta).
 
@@ -420,15 +420,15 @@ merge_meta(CType, Meta1, Meta2) ->
            end,
     %% Make sure the content type is
     %% up-to-date
-    drop_the_dot(dict:store(?MD_CTYPE, CType, Meta)).
+    drop_the_dot(riak_object:metadata_store(?MD_CTYPE, CType, Meta)).
 
 %% @private Never keep a dot for CRDTs, we want all values to survive
 %% a riak_obect:merge/2
 drop_the_dot(Dict) ->
-    dict:erase(?DOT, Dict).
+    riak_object:metadata_erase(?DOT, Dict).
 
 lastmod(Meta) ->
-    dict:fetch(?MD_LASTMOD, Meta).
+    riak_object:metadata_fetch(?MD_LASTMOD, Meta).
 
 later(TS1, TS2) ->
     case timer:now_diff(TS1, TS2) of

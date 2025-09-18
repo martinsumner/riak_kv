@@ -38,7 +38,7 @@
 -type bucket() :: binary() | {binary(), binary()}.
 %% -type bkey() :: {bucket(), key()}.
 -type value() :: term().
--type riak_object_dict() :: dict:dict().
+-type riak_object_dict() :: dict:dict()|maps:map().
 
 -record(r_content, {
           metadata :: riak_object_dict(),
@@ -59,7 +59,7 @@
           key :: key(),
           contents :: list(r_content()),
           vclock = vclock:fresh() :: vclock:vclock(),
-          updatemetadata=dict:store(clean, true, dict:new()) :: riak_object_dict(),
+          updatemetadata=metadata_store(clean, true, metadata_new()) :: riak_object_dict(),
           updatevalue :: term()
          }).
 -record(p_object, {
@@ -81,7 +81,6 @@
 
 -define(MAX_KEY_SIZE, 65536).
 
--define(LASTMOD_LEN, 29). %% static length of rfc1123_date() type. Hard-coded in Erlang.
 -define(V1_VERS, 1).
 -define(MAGIC, 53).      %% Magic number, as opposed to 131 for Erlang term-to-binary magic
                          %% Shanley's(11) + Joe's(42)
@@ -113,6 +112,8 @@
 -export([find_bestobject/1]).
 -export([spoof_getdeletedobject/1]).
 -export([delete_hash/1]).
+-export([obj_not_deleted/1]).
+-export([metadata_new/0, metadata_fetch/2, metadata_erase/2, metadata_store/3, metadata_find/2]).
 
 -ifdef(TEST).
 -export([convert_object_to_headonly/3]). % Used in unit testing of get_core
@@ -129,11 +130,11 @@ new(B, K, V) when is_binary(B), is_binary(K) ->
 -spec new(Bucket::bucket(), Key::key(), Value::value(),
           string() | riak_object_dict() | no_initial_metadata) -> riak_object().
 new({T, B}, K, V, C) when is_binary(T), is_binary(B), is_binary(K), is_list(C) ->
-    new_int({T, B}, K, V, dict:from_list([{?MD_CTYPE, C}]));
+    new_int({T, B}, K, V, metadata_fromlist([{?MD_CTYPE, C}]));
 new(B, K, V, C) when is_binary(B), is_binary(K), is_list(C) ->
-    new_int(B, K, V, dict:from_list([{?MD_CTYPE, C}]));
+    new_int(B, K, V, metadata_fromlist([{?MD_CTYPE, C}]));
 
-%% @doc Constructor for new riak objects with an initial metadata dict.
+%% @doc Constructor for new riak objects with an initial metadata map.
 %%
 %% NOTE: Removed "is_tuple(MD)" guard to make Dialyzer happy.  The previous clause
 %%       has a guard for string(), so this clause is OK without the guard.
@@ -150,7 +151,7 @@ new_int(B, K, V, MD) ->
         false ->
             case MD of
                 no_initial_metadata ->
-                    Contents = [#r_content{metadata=dict:new(), value=V}],
+                    Contents = [#r_content{metadata=metadata_new(), value=V}],
                     #r_object{bucket=B,key=K,
                               contents=Contents,vclock=vclock:fresh()};
                 _ ->
@@ -184,8 +185,8 @@ equal(Obj1,Obj2) ->
         andalso vclock:equal(vclock(Obj1),vclock(Obj2))
         andalso equal2(Obj1,Obj2).
 equal2(Obj1,Obj2) ->
-    UM1 = lists:keysort(1, dict:to_list(Obj1#r_object.updatemetadata)),
-    UM2 = lists:keysort(1, dict:to_list(Obj2#r_object.updatemetadata)),
+    UM1 = lists:keysort(1, metadata_tolist(Obj1#r_object.updatemetadata)),
+    UM2 = lists:keysort(1, metadata_tolist(Obj2#r_object.updatemetadata)),
     (UM1 =:= UM2)
         andalso (Obj1#r_object.updatevalue =:= Obj2#r_object.updatevalue)
         andalso begin
@@ -197,11 +198,105 @@ equal_contents([],[]) -> true;
 equal_contents(_,[]) -> false;
 equal_contents([],_) -> false;
 equal_contents([C1|R1],[C2|R2]) ->
-    MD1 = lists:keysort(1, dict:to_list(C1#r_content.metadata)),
-    MD2 = lists:keysort(1, dict:to_list(C2#r_content.metadata)),
+    MD1 = lists:keysort(1, metadata_tolist(C1#r_content.metadata)),
+    MD2 = lists:keysort(1, metadata_tolist(C2#r_content.metadata)),
     (MD1 =:= MD2)
         andalso (C1#r_content.value =:= C2#r_content.value)
         andalso equal_contents(R1,R2).
+
+
+-type metadata_key() :: atom()|binary().
+-type metadata_value() :: any().
+
+-ifdef(TEST).
+-spec metadata_new() -> dict:dict().
+metadata_new() ->
+    dict:new().
+
+-spec metadata_fromlist(list({metadata_key(), metadata_value()})) -> dict:dict().
+metadata_fromlist(MetaList) ->
+    dict:from_list(MetaList).
+
+-else.
+-spec metadata_new() -> maps:map().
+metadata_new() ->
+    maps:new().
+
+-spec metadata_fromlist(list({metadata_key(), metadata_value()})) -> maps:map().
+metadata_fromlist(MetaList) ->
+    maps:from_list(MetaList).
+-endif.
+
+-spec metadata_store(
+    metadata_key(), metadata_value(), maps:map()|dict:dict()) ->
+        maps:map()|dict:dict().
+metadata_store(Key, Value, MetaAsMap) when is_map(MetaAsMap) ->
+    maps:put(Key, Value, MetaAsMap);
+metadata_store(Key, Value, Meta) ->
+    dict:store(Key, Value, Meta).
+
+-spec metadata_tolist(
+    dict:dict()|maps:map()) ->
+        list({metadata_key(), metadata_value()}).
+metadata_tolist(MetaAsMap) when is_map(MetaAsMap) ->
+    maps:to_list(MetaAsMap);
+metadata_tolist(Meta) ->
+    dict:to_list(Meta).
+
+-spec metadata_fetch(metadata_key(), dict:dict()|maps:map()) -> metadata_value().
+metadata_fetch(Key, MetaAsMap) when is_map(MetaAsMap) ->
+    maps:get(Key, MetaAsMap);
+metadata_fetch(Key, Meta) ->
+    dict:fetch(Key, Meta).
+
+-spec metadata_find(metadata_key(), dict:dict()|maps:map()) -> metadata_value().
+metadata_find(Key, MetaAsMap) when is_map(MetaAsMap) ->
+    maps:find(Key, MetaAsMap);
+metadata_find(Key, Meta) ->
+    dict:find(Key, Meta).
+
+-spec metadata_iskey(metadata_key(), dict:dict()|maps:map()) -> boolean().
+metadata_iskey(Key, MetaAsMap) when is_map(MetaAsMap) ->
+    maps:is_key(Key, MetaAsMap);
+metadata_iskey(Key, Meta) ->
+    dict:is_key(Key, Meta).
+
+-spec metadata_keycount(dict:dict()|maps:map()) -> non_neg_integer().
+metadata_keycount(MetaAsMap) when is_map(MetaAsMap) ->
+    maps:size(MetaAsMap);
+metadata_keycount(Meta) ->
+    dict:size(Meta).
+
+-spec metadata_erase(
+    metadata_key(), dict:dict()|maps:map()) ->
+        dict:dict()|maps:map().
+metadata_erase(Key, MetaAsMap) when is_map(MetaAsMap) ->
+    maps:remove(Key, MetaAsMap);
+metadata_erase(Key, Meta) ->
+    dict:erase(Key, Meta). 
+
+-spec metadata_fold(
+    fun((metadata_key(), metadata_value(), any()) -> any()),
+    any(),
+    maps:map()|dict:dict()) ->
+        any().
+metadata_fold(FoldFun, InitAcc, MetaAsMap) when is_map(MetaAsMap) ->
+    maps:fold(FoldFun, InitAcc, MetaAsMap);
+metadata_fold(FoldFun, InitAcc, Meta) ->
+    dict:fold(FoldFun, InitAcc, Meta).
+
+%% @doc Determine whether all contents of an object are marked as
+%%      deleted.  Return is the atom 'undefined' if all contents
+%%      are marked deleted, or the input Obj if any of them are not.
+-spec obj_not_deleted(
+    riak_object:riak_object()) ->
+        undefined|riak_object:riak_object().
+obj_not_deleted(Obj) ->
+    case [{M, V} || {M, V} <- riak_object:get_contents(Obj),
+                    metadata_iskey(<<"X-Riak-Deleted">>, M) =:= false] of
+        [] -> undefined;
+        _ -> Obj
+    end.
 
 
 %% @doc  Given a list of riak_object()s, return the objects that are pure
@@ -417,15 +512,15 @@ most_recent_content(AllContents) ->
     hd(lists:sort(fun compare_content_dates/2, AllContents)).
 
 compare_content_dates(C1,C2) ->
-    D1 = dict:fetch(<<"X-Riak-Last-Modified">>, C1#r_content.metadata),
-    D2 = dict:fetch(<<"X-Riak-Last-Modified">>, C2#r_content.metadata),
+    D1 = metadata_fetch(<<"X-Riak-Last-Modified">>, C1#r_content.metadata),
+    D2 = metadata_fetch(<<"X-Riak-Last-Modified">>, C2#r_content.metadata),
     %% true if C1 was modifed later than C2
     Cmp1 = riak_core_util:compare_dates(D1, D2),
     %% true if C2 was modifed later than C1
     Cmp2 = riak_core_util:compare_dates(D2, D1),
     %% check for deleted objects
-    Del1 = dict:is_key(<<"X-Riak-Deleted">>, C1#r_content.metadata),
-    Del2 = dict:is_key(<<"X-Riak-Deleted">>, C2#r_content.metadata),
+    Del1 = metadata_iskey(<<"X-Riak-Deleted">>, C1#r_content.metadata),
+    Del2 = metadata_iskey(<<"X-Riak-Deleted">>, C2#r_content.metadata),
 
     SameDate = (Cmp1 =:= Cmp2),
     case {SameDate, Del1, Del2} of
@@ -472,7 +567,7 @@ merge(OldObject=#r_object{}, NewObject=#r_object{}, WriteOnce, DVV) ->
             OldObject#r_object{contents=Contents,
                 vclock=vclock:merge([OldObject#r_object.vclock,
                     NewObj1#r_object.vclock]),
-                updatemetadata=dict:store(clean, true, dict:new()),
+                updatemetadata=metadata_store(clean, true, metadata_new()),
                 updatevalue=undefined}
     end.
 
@@ -537,15 +632,15 @@ compare(A=#r_content{value=VA}, B=#r_content{value=VB}) ->
 %% @see compare/2
 %% @see lists:usort/3
 compare_metadata(#r_content{metadata=MA}, #r_content{metadata=MB}) ->
-    ASize = dict:size(MA),
-    BSize = dict:size(MB),
+    ASize = metadata_keycount(MA),
+    BSize = metadata_keycount(MB),
     if ASize < BSize ->
             true;
        ASize > BSize ->
             false;
        true ->
             %% same size metadata, need to do actual compare
-            lists:sort(dict:to_list(MA)) =< lists:sort(dict:to_list(MB))
+            lists:sort(metadata_tolist(MA)) =< lists:sort(metadata_tolist(MB))
     end.
 
 %% @private de-duplicates, removes dominated siblings, merges CRDTs
@@ -730,7 +825,7 @@ merge_acc_to_contents(Bucket, MergeAcc) ->
 -spec get_dot(riak_object_dict()) ->
         {ok, {vclock:dot(), vclock:pure_dot()}} | undefined.
 get_dot(Dict) ->
-    case dict:find(?DOT, Dict) of
+    case metadata_find(?DOT, Dict) of
         {ok, Dot} ->
             case vclock:valid_dot(Dot) of
                 true ->
@@ -755,25 +850,27 @@ get_vc_dot(Dict) ->
 %%       update_metadata() calls) to this riak_object.
 -spec apply_updates(riak_object()) -> riak_object().
 apply_updates(Object=#r_object{}) ->
-    VL = case Object#r_object.updatevalue of
-             undefined ->
-                 [C#r_content.value || C <- Object#r_object.contents];
-             _ ->
-                 [Object#r_object.updatevalue]
-         end,
-    MD = case dict:find(clean, Object#r_object.updatemetadata) of
-             {ok,_} ->
-                 MDs = [C#r_content.metadata || C <- Object#r_object.contents],
-                 case Object#r_object.updatevalue of
-                     undefined -> MDs;
-                     _ -> [hd(MDs)]
-                 end;
-             error ->
-                 [dict:erase(clean,Object#r_object.updatemetadata) || _X <- VL]
-         end,
+    VL =
+        case Object#r_object.updatevalue of
+            undefined ->
+                [C#r_content.value || C <- Object#r_object.contents];
+            _ ->
+                [Object#r_object.updatevalue]
+        end,
+    MD =
+        case metadata_find(clean, Object#r_object.updatemetadata) of
+            {ok, _} ->
+                MDs = [C#r_content.metadata || C <- Object#r_object.contents],
+                case Object#r_object.updatevalue of
+                    undefined -> MDs;
+                    _ -> [hd(MDs)]
+                end;
+            error ->
+                [metadata_erase(clean,Object#r_object.updatemetadata) || _X <- VL]
+        end,
     Contents = [#r_content{metadata=M,value=V} || {M,V} <- lists:zip(MD, VL)],
     Object#r_object{contents=Contents,
-                    updatemetadata=dict:store(clean, true, dict:new()),
+                    updatemetadata=metadata_store(clean, true, metadata_new()),
                     updatevalue=undefined}.
 
 %% @doc Return the containing bucket for this riak_object.
@@ -924,7 +1021,7 @@ vclock_hash(Obj=#r_object{}) ->
 %% @doc  Set the updated metadata of an object to M.
 -spec update_metadata(riak_object(), riak_object_dict()) -> riak_object().
 update_metadata(Object=#r_object{}, M) ->
-    Object#r_object{updatemetadata=dict:erase(clean, M)}.
+    Object#r_object{updatemetadata=metadata_erase(clean, M)}.
 
 %% @doc  Set the updated value of an object to V
 -spec update_value(riak_object(), value()) -> riak_object().
@@ -1001,7 +1098,7 @@ actor_counter(Actor, #r_object{vclock=VC}) ->
 -spec assign_dot(riak_object(), vclock:dot(), boolean()) -> riak_object().
 assign_dot(Object=#r_object{}, Dot, true) ->
     #r_object{contents=[C=#r_content{metadata=Meta0}]} = Object,
-    Object#r_object{contents=[C#r_content{metadata=dict:store(?DOT, Dot, Meta0)}]};
+    Object#r_object{contents=[C#r_content{metadata=metadata_store(?DOT, Dot, Meta0)}]};
 assign_dot(Object, _Dot, _DVVEnabled) ->
     Object.
 
@@ -1065,9 +1162,13 @@ index_data(undefined) ->
     [];
 index_data(Obj) ->
     MetaDatas = get_metadatas(Obj),
-    lists:flatten([dict:fetch(?MD_INDEX, MD)
-                   || MD <- MetaDatas,
-                      dict:is_key(?MD_INDEX, MD)]).
+    lists:flatten(
+        [
+            metadata_fetch(?MD_INDEX, MD)
+            || MD <- MetaDatas,
+            metadata_iskey(?MD_INDEX, MD)
+        ]
+    ).
 
 %% @doc Assemble a list of index specs in the
 %% form of triplets of the form
@@ -1106,7 +1207,7 @@ from_json(JsonObj) ->
     riak_object_json:decode(JsonObj).
 
 is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
-    case dict:find(clean, M) of
+    case metadata_find(clean, M) of
         error -> true;
         {ok,_} ->
             case V of
@@ -1484,7 +1585,7 @@ is_aae_object_deleted([], ReturnMD) ->
 is_aae_object_deleted(MDs, ReturnMD) ->
     PredFun = 
         fun(M) ->
-            dict:is_key(<<"X-Riak-Deleted">>, M)
+            metadata_iskey(<<"X-Riak-Deleted">>, M)
         end,
     IsDeleted = lists:all(PredFun, MDs),
     case ReturnMD of
@@ -1529,7 +1630,7 @@ sib_of_binary(<<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, Met
     MDList2 = vtag_meta(VTag, MDList1),
     MDList3 = val_encoding_meta(ValBin, MDList2),
     MDList = meta_of_binary(MetaRestBin, MDList3),
-    MD = dict:from_list(MDList),
+    MD = metadata_fromlist(MDList),
     {#r_content{metadata=MD, value=decode_maybe_binary(ValBin)}, LastModDate, Rest}.
 
 val_encoding_meta(<<>>, MDList) ->
@@ -1595,9 +1696,12 @@ bin_contents(Contents) ->
     lists:foldl(F, <<>>, Contents).
 
 meta_bin(MD) ->
-    {{VTagVal, Deleted, LastModVal}, RestBin} = dict:fold(fun fold_meta_to_bin/3,
-                                                          {{undefined, <<0>>, undefined}, <<>>},
-                                                          MD),
+    {{VTagVal, Deleted, LastModVal}, RestBin} =
+        metadata_fold(
+            fun fold_meta_to_bin/3,
+            {{undefined, <<0>>, undefined}, <<>>},
+            MD
+        ),
     VTagBin = case VTagVal of
                   undefined ->  ?EMPTY_VTAG_BIN;
                   _ -> list_to_binary(VTagVal)
@@ -1638,9 +1742,9 @@ encode_maybe_binary(Value, 0) when not is_binary(Value) ->
     <<0, (term_to_binary(Value))/binary>>.
 
 determine_binary_type(Val, Meta) when is_binary(Val) ->
-    case dict:find(?MD_VAL_ENCODING, Meta) of
+    case metadata_find(?MD_VAL_ENCODING, Meta) of
         error -> {1, Meta};
-        {ok, TypeTag} -> {TypeTag, dict:erase(?MD_VAL_ENCODING, Meta)}
+        {ok, TypeTag} -> {TypeTag, metadata_erase(?MD_VAL_ENCODING, Meta)}
     end;
 determine_binary_type(_Val, Meta) ->
     {0, Meta}.
@@ -1662,7 +1766,7 @@ update_last_modified(RObj) ->
 %% Update X-Riak-VTag and X-Riak-Last-Modified in the object's metadata, if
 %% necessary with an external timestamp passed in.
 update_last_modified(RObj, TS) ->
-    MD0 = case dict:find(clean, riak_object:get_update_metadata(RObj)) of
+    MD0 = case metadata_find(clean, riak_object:get_update_metadata(RObj)) of
               {ok, true} ->
                   %% There have been no changes to updatemetadata. If we stash the
                   %% last modified in this dict, it will cause us to lose existing
@@ -1687,13 +1791,16 @@ update_last_modified(RObj, TS) ->
     %% which should serve the same purpose.  It was possible to generate two
     %% objects with the same vclock on 0.14.2 if the same clientid was used in
     %% the same second.  It can be revisited post-1.0.0.
-    NewMD = dict:store(?MD_VTAG, riak_kv_util:make_vtag(TS),
-                       dict:store(?MD_LASTMOD, TS, MD0)),
+    NewMD =
+        metadata_store(
+            ?MD_VTAG, riak_kv_util:make_vtag(TS),
+            metadata_store(?MD_LASTMOD, TS, MD0)
+        ),
     riak_object:update_metadata(RObj, NewMD).
 
 %% Get the last modified date from the metadata
 get_last_modified(MD) ->
-    case dict:find(?MD_LASTMOD, MD) of
+    case metadata_find(?MD_LASTMOD, MD) of
         error ->
             {0, 0, 0};
         {ok, TS} ->
