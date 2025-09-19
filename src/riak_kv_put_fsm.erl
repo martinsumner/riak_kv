@@ -146,8 +146,8 @@
 
 -spec start(
     {raw, non_neg_integer(), pid()},
-    riak_object:object(),
-    proplist:proplist()) ->
+    riak_object:riak_object(),
+    proplists:proplist()) ->
         consistent|write_once|{ok, pid()}|{error, overload}.
 start(From, RObj, PutOptions) ->
     Bucket = riak_object:bucket(RObj),
