@@ -34,8 +34,7 @@
                 {gen_fsm, send_event, 2}]}).
 
 -behaviour(gen_fsm).
--define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
--export([start/3]).
+-export([start/3, start_link/3]).
 -export([set_put_coordinator_failure_timeout/1,
          get_put_coordinator_failure_timeout/0]).
 -ifdef(TEST).
@@ -65,7 +64,7 @@
         {dw, non_neg_integer()} |
         {timeout, timeout()} |
         %% Prevent precommit/postcommit hooks from running
-        disable_hooks |
+        {disable_hooks, boolean()} |
         %% Request additional details about request added as extra
         %% element at the end of result tuple
         {details, detail()} |
@@ -73,7 +72,7 @@
         {sync_on_write, atom()} |
         %% Put the value as-is, do not increment the vclocks
         %% to make the value a frontier.
-        asis |
+        {asis, boolean()} |
         %% Use a sloppy quorum, default = true
         {sloppy_quorum, boolean()} |
         %% The N value, default = value from bucket properties
@@ -91,7 +90,10 @@
         %% it.
         {mbox_check, boolean()} |
         {counter_op, any()} |
-        {crdt_op, any()}.
+        {crdt_op, any()} |
+        {node_confirms, non_neg_integer()} |
+        {returnbody, boolean()} |
+        {update_last_modified, boolean()}.
 
 -type options() :: [option()].
 
@@ -151,7 +153,7 @@
         consistent|write_once|{ok, pid()}|{error, overload}.
 start(From, RObj, PutOptions) ->
     Bucket = riak_object:bucket(RObj),
-    BucketProps = get_bucket_props(Bucket),
+    BucketProps = riak_kv_util:get_bucket_props(Bucket),
     case {lists:member({consistent, true}, BucketProps),
             lists:member({write_once, true}, BucketProps)} of
         {true, _} ->
@@ -172,6 +174,12 @@ start(From, RObj, PutOptions) ->
                     {ok, Pid}
             end
     end.
+
+%% Included for backward compatibility, in case someone is, say, passing around
+%% a riak_client instace between nodes during a rolling upgrade. The old
+%% `start_link' function has been renamed `start' since it doesn't actually link
+%% to the caller.
+start_link(From, Object, PutOptions) -> start(From, Object, PutOptions).
 
 set_put_coordinator_failure_timeout(MS) when is_integer(MS), MS >= 0 ->
     application:set_env(riak_kv, put_coordinator_failure_timeout, MS);
@@ -244,7 +252,7 @@ monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, StateData) ->
 %% As test, but linked to the caller
 test_link(From, Object, PutOptions, StateProps) ->
     Bucket = riak_object:bucket(Object),
-    BucketProps = get_bucket_props(Bucket),
+    BucketProps = riak_kv_util:get_bucket_props(Bucket),
     gen_fsm:start_link(
         ?MODULE,
         {test, [From, Object, PutOptions, Bucket, BucketProps], StateProps},
@@ -355,22 +363,19 @@ prepare(
 
 %% @private
 validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
-                                      options = Options0,
+                                      options = Options,
                                       robj = RObj0,
                                       n=N, bucket_props = BucketProps,
                                       trace = Trace,
                                       preflist2 = Preflist2}) ->
-    Timeout = get_option(timeout, Options0, ?DEFAULT_TIMEOUT),
-    PW0 = get_option(pw, Options0, default),
-    NodeConfirms0 = get_option(node_confirms, Options0, default),
-    W0 = get_option(w, Options0, default),
-    DW0 = get_option(dw, Options0, default),
-    SyncOnWrite0 = get_option(sync_on_write, Options0, default),
+    
+    {Timeout, PW0, NC0, W0, DW0, SW0, Disable, ReturnBody, Asis, ULM} =
+        get_options_for_validate(Options),
 
     PW = riak_kv_util:expand_rw_value(pw, PW0, BucketProps, N),
-    NodeConfirms = riak_kv_util:expand_rw_value(node_confirms, NodeConfirms0, BucketProps, N),
+    NodeConfirms = riak_kv_util:expand_rw_value(node_confirms, NC0, BucketProps, N),
     W = riak_kv_util:expand_rw_value(w, W0, BucketProps, N),
-    SyncOnWrite = riak_kv_util:expand_sync_on_write(SyncOnWrite0, BucketProps),
+    SyncOnWrite = riak_kv_util:expand_sync_on_write(SW0, BucketProps),
 
     %% Expand the DW value, but also ensure that DW <= W
     DW1 = riak_kv_util:expand_rw_value(dw, DW0, BucketProps, N),
@@ -393,7 +398,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
         PW =:= error ->
             process_reply({error, {pw_val_violation, PW0}}, StateData0);
         NodeConfirms =:= error ->
-            process_reply({error, {node_confirms_val_violation, NodeConfirms0}}, StateData0);
+            process_reply({error, {node_confirms_val_violation, NC0}}, StateData0);
         W =:= error ->
             process_reply({error, {w_val_violation, W0}}, StateData0);
         DW =:= error ->
@@ -407,8 +412,6 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                    need, MinVnodes}}, StateData0);
         true ->
             AllowMult = get_option(allow_mult, BucketProps),
-            Options = flatten_options(Options0 ++ ?DEFAULT_OPTS, []),
-            Disable = get_option(disable_hooks, Options),
             Precommit =
                 if Disable -> [];
                    true ->
@@ -419,26 +422,24 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                 if Disable -> [];
                    true -> get_hooks(postcommit, BucketProps, StateData0)
                 end,
-            {VNodeOpts0, ReturnBody} =
-                case get_option(returnbody, Options) of
-                    true ->
-                        {[], true};
+            InitVNodeOpts =
+                case {ReturnBody, Postcommit} of
+                    {false, []} ->
+                        [{bucket_props, BucketProps}];
                     _ ->
-                        case Postcommit of
-                            [] -> 
-                                {[], false};
-                            _ -> 
-                                {[{returnbody,true}], false}
-                        end
+                        [{returnbody, true}, {bucket_props, BucketProps}]
                 end,
-            RObj = apply_updates(RObj0, Options),
+            RObj = apply_updates(RObj0, ULM),
             RR =
-                case get_option(asis, Options) of
+                case Asis of
                     true ->
                         Clock = riak_object:vclock(RObj),
                         MaybePrunedClock =
                             vclock:prune(
-                                Clock, riak_core_util:moment(), BucketProps),
+                                Clock,
+                                riak_core_util:moment(),
+                                BucketProps
+                            ),
                         case {length(MaybePrunedClock), length(Clock)} of
                             {PVL, UPVL} when PVL < UPVL ->
                                 true;
@@ -465,7 +466,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
             VNodeOpts =
                 handle_options(
                     Options3,
-                    [{bucket_props, BucketProps}|VNodeOpts0]
+                    InitVNodeOpts
                 ),
             StateData =
                 StateData0#state{
@@ -492,9 +493,9 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
             end
     end.
 
-apply_updates(RObj0, Options) ->
+apply_updates(RObj0, ULM) ->
     RObj1 = 
-        case get_option(update_last_modified, Options) of
+        case ULM of
             true ->
                 riak_object:update_last_modified(RObj0);
             _ ->
@@ -756,6 +757,96 @@ code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
 %% Internal functions
 %% ====================================================================
 
+
+-type w_param() :: backend|one|quorum|all|default|non_neg_integer()|binary().
+
+-spec get_options_for_validate(list(option()))->
+    {
+        pos_integer(),
+        w_param(), w_param(), w_param(), w_param(), w_param(),
+        boolean(), boolean(), boolean(), boolean()
+    }.
+get_options_for_validate(Options) ->
+    get_validate_options(
+        Options,
+        ?DEFAULT_TIMEOUT,
+        default, default, default, default, default,
+        false, false, false, true
+    ).
+
+get_validate_options([], TO, PW, NC, W, DW, SW, DH, RB, AI, UM) ->
+    {TO, PW, NC, W, DW, SW, DH, RB, AI, UM};
+get_validate_options(
+    [{timeout, TO}|RestOpts],
+    _TO,
+    PW, NC, W, DW, SW, DH, RB, AI, UM
+) ->
+    get_validate_options(RestOpts, TO, PW, NC, W, DW, SW, DH, RB, AI, UM);
+get_validate_options(
+    [{pw, PW}|RestOpts],
+    TO,
+    _PW,
+    NC, W, DW, SW, DH, RB, AI, UM
+) ->
+    get_validate_options(RestOpts, TO, PW, NC, W, DW, SW, DH, RB, AI, UM);
+get_validate_options(
+    [{node_confirms, NC}|RestOpts],
+    TO, PW,
+    _NC,
+    W, DW, SW, DH, RB, AI, UM
+) ->
+    get_validate_options(RestOpts, TO, PW, NC, W, DW, SW, DH, RB, AI, UM);
+get_validate_options(
+    [{w, W}|RestOpts],
+    TO, PW, NC,
+    _W,
+    DW, SW, DH, RB, AI, UM
+) ->
+    get_validate_options(RestOpts, TO, PW, NC, W, DW, SW, DH, RB, AI, UM);
+get_validate_options(
+    [{dw, DW}|RestOpts],
+    TO, PW, NC, W,
+    _DW,
+    SW, DH, RB, AI, UM
+) ->
+    get_validate_options(RestOpts, TO, PW, NC, W, DW, SW, DH, RB, AI, UM);
+get_validate_options(
+    [{sync_on_write, SW}|RestOpts],
+    TO, PW, NC, W, DW,
+    _SW,
+    DH, RB, AI, UM
+) ->
+    get_validate_options(RestOpts, TO, PW, NC, W, DW, SW, DH, RB, AI, UM);
+get_validate_options(
+    [{disable_hooks, DH}|RestOpts],
+    TO, PW, NC, W, DW, SW,
+    _DH,
+    RB, AI, UM
+) ->
+    get_validate_options(RestOpts, TO, PW, NC, W, DW, SW, DH, RB, AI, UM);
+get_validate_options(
+    [{returnbody, RB}|RestOpts],
+    TO, PW, NC, W, DW, SW, DH,
+    _RB,
+    AI, UM
+) ->
+    get_validate_options(RestOpts, TO, PW, NC, W, DW, SW, DH, RB, AI, UM);
+get_validate_options(
+    [{asis, AI}|RestOpts],
+    TO, PW, NC, W, DW, SW, DH, RB,
+    _AI,
+    UM
+) ->
+    get_validate_options(RestOpts, TO, PW, NC, W, DW, SW, DH, RB, AI, UM);
+get_validate_options(
+    [{update_last_modified, UM}|RestOpts],
+    TO, PW, NC, W, DW, SW, DH, RB, AI,
+    _UM
+) ->
+    get_validate_options(RestOpts, TO, PW, NC, W, DW, SW, DH, RB, AI, UM);
+get_validate_options([_Opt|RestOpts], TO, PW, NC, W, DW, SW, DH, RB, AI, UM) ->
+    get_validate_options(RestOpts, TO, PW, NC, W, DW, SW, DH, RB, AI, UM).
+
 %% Move to the new state, marking the time it started
 new_state(StateName, StateData=#state{trace = true}) ->
     {next_state, StateName, add_timing(StateName, StateData)};
@@ -812,27 +903,9 @@ process_reply(Reply, StateData = #state{postcommit = PostCommit,
     end.
 
 
-%%
-%% Given an expanded proplist of options, take the first entry for any given key
-%% and ignore the rest
-%%
-%% @private
-flatten_options([], Opts) ->
-    Opts;
-flatten_options([{Key, Value} | Rest], Opts) ->
-    case lists:keymember(Key, 1, Opts) of
-        true ->
-            flatten_options(Rest, Opts);
-        false ->
-            flatten_options(Rest, [{Key, Value} | Opts])
-    end.
-
 %% @private
 handle_options([], Acc) ->
     Acc;
-handle_options([{returnbody, true}|T], Acc) ->
-    VNodeOpts = [{returnbody, true} | Acc],
-    handle_options(T, VNodeOpts);
 handle_options([{sync_on_write, Val}|T], Acc) ->
     VNodeOpts = [{sync_on_write, Val} | Acc],
     handle_options(T, VNodeOpts);
@@ -986,18 +1059,17 @@ client_reply(Reply, State = #state{from = {raw, ReqId, Pid},
                                    timing = Timing0,
                                    options = Options}) ->
     Timing = riak_kv_fsm_timing:add_timing(reply, Timing0),
-    Reply2 = case get_option(details, Options, false) of
-                 false ->
-                     Reply;
-                 [] ->
-                     Reply;
-                 Details ->
-                     add_client_info(Reply, Details, 
-                                     State#state{timing = Timing})
-             end,
+    Reply2 =
+        case get_option(details, Options, false) of
+            false ->
+                Reply;
+            [] ->
+                Reply;
+            Details ->
+                add_client_info(Reply, Details, State#state{timing = Timing})
+        end,
     Pid ! {ReqId, Reply2},
-    State#state{reply = Reply, 
-                timing = Timing}.
+    State#state{reply = Reply, timing = Timing}.
 
 add_client_info(Reply, Details, State) ->
     Info = client_info(Details, State, []),
@@ -1037,21 +1109,6 @@ dtrace_errstr(Term) ->
 %% This function is for dbg tracing purposes
 late_put_fsm_coordinator_ack(_Node) ->
     ok.
-
--spec get_bucket_props(riak_object:bucket()) -> list().
-get_bucket_props(Bucket) ->
-    {ok, DefaultProps} = application:get_env(riak_core, default_bucket_props),
-    BucketProps = riak_core_bucket:get_bucket(Bucket),
-    %% typed buckets never fall back to defaults
-    case is_tuple(Bucket) of
-        false ->
-            lists:keymerge(
-                1,
-                lists:keysort(1, BucketProps),
-                lists:keysort(1, DefaultProps));
-        true ->
-            BucketProps
-    end.
 
 %% @private decide on the N Val for the put request, and error if
 %% there is a violation.
@@ -1455,15 +1512,13 @@ get_bucket_props_test_() ->
           begin
               Bucket = <<"bucket">>,
               %% amazing, not a ukeymerge
-              Props = get_bucket_props(Bucket),
+              Props = riak_kv_util:get_bucket_props(Bucket),
               %% i.e. a merge with defaults
               ?assertEqual([
                             {bprop1,bval1},
                             {bprop2,bval2},
                             {prop1,val1},
-                            {prop1,val1},
                             {prop2,bval9},
-                            {prop2,val2},
                             {prop3,val3}
                            ], Props)
           end)
@@ -1472,7 +1527,7 @@ get_bucket_props_test_() ->
        ?_test(
           begin
               Bucket = {<<"type">>, <<"bucket">>},
-              Props = get_bucket_props(Bucket),
+              Props = riak_kv_util:get_bucket_props(Bucket),
               %% i.e. no merge with defaults
               ?assertEqual(BucketProps, Props)
           end
