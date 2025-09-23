@@ -55,7 +55,8 @@
         shuffle_list/1,
         kv_ready/0,
         ngr_initial_timeout/0,
-        sys_monitor_count/0
+        sys_monitor_count/0,
+        get_bucket_props/1
     ]).
 -export([report_hashtree_tokens/0, reset_hashtree_tokens/2]).
 -export([reset_aae_key_filter/0]).
@@ -285,6 +286,19 @@ kv_ready() ->
 -spec ngr_initial_timeout() -> pos_integer().
 ngr_initial_timeout() ->
     application:get_env(riak_kv, ngr_initial_timeout, 60000).
+
+-spec get_bucket_props(riak_object:bucket()) -> list().
+get_bucket_props(Bucket) ->
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    %% typed buckets never fall back to defaults
+    case is_tuple(Bucket) of
+        false ->
+            {ok, DefaultProps} =
+                application:get_env(riak_core, default_bucket_props),
+            riak_core_bucket_props:merge(BucketProps, DefaultProps);
+        true ->
+            BucketProps
+    end.
 
 %% ===================================================================
 %% Hashtree token management functions

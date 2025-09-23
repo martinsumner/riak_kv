@@ -2865,14 +2865,8 @@ do_put(Sender, Request, State) ->
 %% @private
 %% upon receipt of a client-initiated put
 do_put(Sender, {Bucket, _Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
-    BProps =
-        case proplists:get_value(bucket_props, Options) of
-            undefined ->
-                riak_core_bucket:get_bucket(Bucket);
-            Props ->
-                Props
-        end,
-    ReadRepair = proplists:get_value(rr, Options, false),
+   {ReadRepair, Coord, SyncOnWrite, ReturnBody, CRDTOp, BucketProps} =
+        get_put_options(Options),
     PruneTime =
         case ReadRepair of
             true ->
@@ -2880,13 +2874,16 @@ do_put(Sender, {Bucket, _Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
             false ->
                 StartTime
         end,
-    Coord = proplists:get_value(coord, Options, false),
-    SyncOnWrite = proplists:get_value(sync_on_write, Options, undefined),
-    CRDTOp = proplists:get_value(counter_op, Options, proplists:get_value(crdt_op, Options, undefined)),
+    BProps = 
+        case BucketProps of
+            undefined ->
+                riak_kv_util:get_bucket_props(Bucket);
+            OptionProps ->
+                OptionProps
+        end,
     PutArgs = 
         #putargs{
-            returnbody =
-                proplists:get_value(returnbody,Options,false) orelse Coord,
+            returnbody = ReturnBody orelse Coord,
             coord=Coord,
             lww=proplists:get_value(last_write_wins, BProps, false),
             bkey=BKey,
@@ -2898,13 +2895,43 @@ do_put(Sender, {Bucket, _Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
             prunetime=PruneTime,
             crdt_op = CRDTOp,
             sync_on_write = SyncOnWrite,
-            reason = put},
+            reason = put
+        },
     {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
     {Reply, UpdState} = perform_put(PrepPutRes, State2, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
 
     update_index_write_stats(UpdPutArgs#putargs.is_index, UpdPutArgs#putargs.index_specs),
     {Reply, UpdState}.
+
+
+get_put_options(Options) ->
+    get_put_options(
+        Options,
+        false,
+        false,
+        undefined,
+        false,
+        proplists:get_value(crdt_op, Options, undefined),
+        undefined
+    ).
+
+get_put_options([], RR, CD, SW, RB, CO, BP) ->
+    {RR, CD, SW, RB, CO, BP};
+get_put_options([{rr, RR}|Opts], _RR, CD, SW, RB, CO, BP) ->
+    get_put_options(Opts, RR, CD, SW, RB, CO, BP);
+get_put_options([coord|Opts], RR, _CD, SW, RB, CO, BP) ->
+    get_put_options(Opts, RR, true, SW, RB, CO, BP);
+get_put_options([{sync_on_write, SW}|Opts], RR, CD, _SW, RB, CO, BP) ->
+    get_put_options(Opts, RR, CD, SW, RB, CO, BP);
+get_put_options([{returnbody, RB}|Opts], RR, CD, SW, _RB, CO, BP) ->
+    get_put_options(Opts, RR, CD, SW, RB, CO, BP);
+get_put_options([{counter_op, CO}|Opts], RR, CD, SW, RB, _CO, BP) ->
+    get_put_options(Opts, RR, CD, SW, RB, CO, BP);
+get_put_options([{bucket_props, BP}|Opts], RR, CD, SW, RB, CO, _BP) ->
+    get_put_options(Opts, RR, CD, SW, RB, CO, BP);
+get_put_options([_Opts|Opts], RR, CD, SW, RB, CO, BP) ->
+    get_put_options(Opts, RR, CD, SW, RB, CO, BP).
 
 
 %% @doc Remove a tombstone, assuming the state of the object currently in the
@@ -3046,30 +3073,60 @@ prepare_put_existing_object(#state{idx =Idx} = State,
                              crdt_op = CRDTOp}=PutArgs,
                             OldObj, IndexBackend, CacheData, RequiresGet) ->
     {IsNewEpoch, ActorId, State2} = maybe_new_key_epoch(Coord, State, OldObj, RObj),
-    DVV = proplists:get_value(dvv_enabled, BProps, true),
-    WriteOnce = proplists:get_value(write_once, BProps, true),
-    case put_merge(Coord, LWW, OldObj, RObj, {IsNewEpoch, ActorId}, StartTime, WriteOnce, DVV) of
+    {DVV, WriteOnce, AllowMult} = get_put_properties(BProps),
+    MergeResult =
+        put_merge(
+            Coord,
+            LWW,
+            OldObj,
+            RObj,
+            {IsNewEpoch, ActorId},
+            StartTime,
+            WriteOnce,
+            DVV
+        ),
+    case MergeResult of
         {oldobj, OldObj} ->
             {{false, {OldObj, unchanged_no_old_object}}, PutArgs, State2};
         {newobj, NewObj} ->
-            case enforce_allow_mult(NewObj, OldObj, BProps) of
+            case enforce_allow_mult(NewObj, OldObj, AllowMult) of
                 {ok, AMObj} ->
                     IndexSpecs =
-                        get_index_specs(IndexBackend, CacheData, RequiresGet,
-                                        AMObj, OldObj),
+                        get_index_specs(
+                            IndexBackend, CacheData, RequiresGet, AMObj, OldObj
+                        ),
                     ObjToStore0 =
                         maybe_prune_vclock(PruneTime, AMObj, BProps),
                     ObjectToStore =
-                        maybe_do_crdt_update(Coord, CRDTOp, ActorId,
-                                                ObjToStore0),
-                    determine_put_result(ObjectToStore, OldObj, Idx,
-                                            PutArgs, State2,
-                                            IndexSpecs, IndexBackend);
+                        maybe_do_crdt_update(
+                            Coord, CRDTOp, ActorId, ObjToStore0),
+                    determine_put_result(
+                        ObjectToStore,
+                        OldObj,
+                        Idx,
+                        PutArgs,
+                        State2,
+                        IndexSpecs, IndexBackend
+                    );
                 {error, Reason} ->
                     ?LOG_ERROR("Error on allow_mult ~w", [Reason]),
                     {{fail, Idx, Reason}, PutArgs, State2}
             end
     end.
+
+get_put_properties(BProps) ->
+    get_put_properties(BProps, true, false, undefined).
+
+get_put_properties([], DVV, WriteOnce, AM) ->
+    {DVV, WriteOnce, AM};
+get_put_properties([{dvv_enabled, DVV}|Props], _DVV, WriteOnce, AM) ->
+    get_put_properties(Props, DVV, WriteOnce, AM);
+get_put_properties([{write_once, WriteOnce}|Props], DVV, _WriteOnce, AM) ->
+    get_put_properties(Props, DVV, WriteOnce, AM);
+get_put_properties([{allow_mult, AM}|Props], DVV, WriteOnce, _AM) ->
+    get_put_properties(Props, DVV, WriteOnce, AM);
+get_put_properties([_Prop|Props], DVV, WriteOnce, AM) ->
+    get_put_properties(Props, DVV, WriteOnce, AM).
 
 determine_put_result({error, E}, _, Idx, PutArgs, State, _IndexSpecs, _IndexBackend) ->
     {{fail, Idx, E}, PutArgs, State};
@@ -3324,11 +3381,9 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
 %% an object with multiple contents if allow_mult=false for that bucket
 %% Also provides a double check that the object is safe to store - its contents
 %% must not be empty, it should not be an object head.
-enforce_allow_mult(Obj, OldObj, BProps) ->
+enforce_allow_mult(Obj, OldObj, AllowMult) ->
     MergedContents = riak_object:get_contents(Obj),
-    case {proplists:get_value(allow_mult, BProps),
-            MergedContents,
-            riak_object:is_head(Obj)} of
+    case {AllowMult, MergedContents, riak_object:is_head(Obj)} of
         {_, [], _} ->
             % This is a known issue - 
             % https://github.com/basho/riak_kv/issues/1707
@@ -3821,7 +3876,7 @@ do_get_vclock({Bucket, Key}, Mod, ModState) ->
             riak_object:riak_object(),
             state()) -> {error, term(), state()}|{ok, state()}.
 do_handoff_put({Bucket, _Key}=BKey, HandoffObj, State) ->
-    BProps = riak_core_bucket:get_bucket(Bucket),
+    BProps = riak_kv_util:get_bucket_props(Bucket),
     PutArgs = 
         #putargs{
             returnbody = false,
