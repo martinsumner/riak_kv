@@ -3315,8 +3315,9 @@ actual_put(BKey={Bucket, Key},
                             mod=Mod,
                             modstate=ModState,
                             update_hook=UpdateHook}) ->
-    case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
-                       MaxCheckFlag, Sync) of
+    case encode_and_put(
+        Obj, Mod, Bucket, Key, IndexSpecs, ModState, MaxCheckFlag, Coord, Sync
+    ) of
         {{ok, UpdModState}, EncodedVal} ->
             aae_update(
                 Bucket, Key, Obj, OldObj, EncodedVal, BucketProps, State
@@ -4248,69 +4249,128 @@ return_encoded_binary_object(Method, EncodedObject) ->
     term_to_binary({ Method, EncodedObject }).
 
 -spec encode_and_put(
-        Obj::riak_object:riak_object(), Mod::term(), Bucket::riak_object:bucket(),
-        Key::riak_object:key(), IndexSpecs::list(), ModState::term(),
-        MaxCheckFlag::no_max_check | do_max_check, Sync::boolean()) ->
+        Obj::riak_object:riak_object(),
+        Mod::term(),
+        Bucket::riak_object:bucket(),
+        Key::riak_object:key(),
+        IndexSpecs::list(),
+        ModState::term(),
+        MaxCheckFlag::no_max_check | do_max_check,
+        Coord::boolean(),
+        Sync::boolean()) ->
            {{ok, UpdModState::term()}, EncodedObj::binary()} |
            {{error, Reason::term(), UpdModState::term()}, EncodedObj::binary()}.
 
-encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState, MaxCheckFlag, Sync) ->
+encode_and_put(
+    Obj, Mod, Bucket, Key, IndexSpecs, ModState, MaxCheckFlag, Coord, Sync
+) ->
     DoMaxCheck = MaxCheckFlag == do_max_check,
-    NumSiblings = riak_object:value_count(Obj),
-    case DoMaxCheck andalso
-         NumSiblings > app_helper:get_env(riak_kv, max_siblings) of
-        true ->
-            ?LOG_ERROR("Put failure: too many siblings for object ~p/~p (~p)",
-                        [Bucket, Key, NumSiblings]),
-            {{error, {too_many_siblings, NumSiblings}, ModState},
-             undefined};
-        false ->
-            case NumSiblings > app_helper:get_env(riak_kv, warn_siblings) of
-                true ->
-                    ?LOG_WARNING("Too many siblings for object ~p/~p (~p)",
-                                  [Bucket, Key, NumSiblings]);
-                false ->
+    case sibling_check(MaxCheckFlag == do_max_check, Coord, Obj) of
+        {too_many_siblings, NumSiblings} ->
+            ?LOG_ERROR(
+                "Put failure: too many siblings for object ~p/~p (~p)",
+                [Bucket, Key, NumSiblings]
+            ),
+            {{error, {too_many_siblings, NumSiblings}, ModState}, undefined};
+        NotTooMany ->
+            case NotTooMany of
+                {sibling_warning, NumSiblings} ->
+                    ?LOG_WARNING(
+                        "Too many siblings for object ~p/~p (~p)",
+                        [Bucket, Key, NumSiblings]
+                    );
+                _ ->
                     ok
             end,
-            encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs,
-                                        ModState, MaxCheckFlag, Sync)
-    end.
-
-encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
-                            MaxCheckFlag, Sync) ->
-    DoMaxCheck = MaxCheckFlag == do_max_check,
-    case uses_r_object(Mod, ModState, Bucket) of
-        true ->
-            %% Non binary returning backends will have to handle size warnings
-            %% and errors themselves.
-            Mod:put_object(Bucket, Key, IndexSpecs, Obj, ModState);
-        false ->
-            ObjFmt = object_format(Mod, ModState),
-            EncodedVal = riak_object:to_binary(ObjFmt, Obj),
-            BinSize = size(EncodedVal),
-            %% Report or fail on large objects
-            case DoMaxCheck andalso
-                 BinSize > app_helper:get_env(riak_kv, max_object_size) of
+            case uses_r_object(Mod, ModState, Bucket) of
                 true ->
-                    ?LOG_ERROR("Put failure: object too large to write ~p/~p ~p bytes",
-                                [Bucket, Key, BinSize]),
-                    {{error, {too_large, BinSize}, ModState},
-                     EncodedVal};
+                    %% Non binary returning backends will have to handle size warnings
+                    %% and errors themselves.
+                    Mod:put_object(Bucket, Key, IndexSpecs, Obj, ModState);
                 false ->
-                    WarnSize = app_helper:get_env(riak_kv, warn_object_size),
-                    case BinSize > WarnSize of
-                       true ->
-                            ?LOG_WARNING("Writing very large object " ++
-                                          "(~p bytes) to ~p/~p",
-                                          [BinSize, Bucket, Key]);
-                        false ->
-                            ok
-                    end,
-                    PutFun = select_put_fun(Mod, ModState, Sync),
-                    PutRet = PutFun(Bucket, Key, IndexSpecs, EncodedVal, ModState),
-                    {PutRet, EncodedVal}
+                    ObjFmt = object_format(Mod, ModState),
+                    EncodedVal = riak_object:to_binary(ObjFmt, Obj),
+                    case size_check(DoMaxCheck, Coord, EncodedVal) of
+                        {too_large, BinSize} ->
+                             ?LOG_ERROR(
+                                "Put failure: "
+                                "object too large to write ~p/~p ~p bytes",
+                                [Bucket, Key, BinSize]
+                            ),
+                            {
+                                {error, {too_large, BinSize}, ModState},
+                                EncodedVal
+                            };
+                        NoTooBig ->
+                            case NoTooBig of
+                                {size_warning, BinSize} ->
+                                    ?LOG_WARNING(
+                                        "Writing very large object "
+                                        "(~p bytes) to ~p/~p",
+                                        [BinSize, Bucket, Key]
+                                    );
+                                _ ->
+                                    ok
+                            end,
+                            PutFun = select_put_fun(Mod, ModState, Sync),
+                            PutRet =
+                                PutFun(
+                                    Bucket,
+                                    Key,
+                                    IndexSpecs,
+                                    EncodedVal,
+                                    ModState
+                                ),
+                            {PutRet, EncodedVal}
+                    end
             end
     end.
+
+size_check(_, false, _EncodedVal) ->
+    ok;
+size_check(true, true, EncodedVal) ->
+    BinSize = size(EncodedVal),
+    MaxSize = app_helper:get_env(riak_kv, max_object_size),
+    case BinSize >  MaxSize of
+        true ->
+            {too_large, BinSize};
+        false ->
+            size_check(false, true, BinSize)
+    end;
+size_check(false, true, BinSize) when is_integer(BinSize) ->
+    WarnSize = app_helper:get_env(riak_kv, warn_object_size),
+    case BinSize > WarnSize of
+        true ->
+            {size_warning, BinSize};
+        false ->
+            ok
+    end;
+size_check(false, true, EncodedVal) ->
+    BinSize = size(EncodedVal),
+    size_check(false, true, BinSize).
+
+sibling_check(_, false, _Obj) ->
+    ok;
+sibling_check(true, true, Obj) ->
+    NumSiblings = riak_object:value_count(Obj),
+    MaxSiblings = app_helper:get_env(riak_kv, max_siblings),
+    case NumSiblings > MaxSiblings of
+        true ->
+            {too_many_siblings, NumSiblings};
+        false ->
+            sibling_check(false, true, NumSiblings)
+    end;
+sibling_check(false, true, NumSiblings) when is_integer(NumSiblings) ->
+    WarnSiblings = app_helper:get_env(riak_kv, warn_siblings),
+    case NumSiblings > WarnSiblings of
+        true ->
+            {sibling_warning, NumSiblings};
+        false ->
+            ok
+    end;
+sibling_check(false, true, Obj) ->
+    NumSiblings = riak_object:value_count(Obj),
+    sibling_check(false, true, NumSiblings).
 
 -spec select_put_fun(Mod::term(), ModState::term(), Sync::boolean()) -> fun().
 select_put_fun(Mod, ModState, Sync) ->
