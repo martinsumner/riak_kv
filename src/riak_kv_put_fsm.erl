@@ -35,8 +35,6 @@
 
 -behaviour(gen_fsm).
 -export([start/3, start_link/3]).
--export([set_put_coordinator_failure_timeout/1,
-         get_put_coordinator_failure_timeout/0]).
 -ifdef(TEST).
 -export([test_link/4]).
 -endif.
@@ -133,14 +131,14 @@
                 reply, % reply sent to client,
                 trace = false :: boolean(), 
                 tracked_bucket=false :: boolean(), %% track per bucket stats
-                bad_coordinators = [] :: [atom()],
-                coordinator_timeout :: integer()
+                bad_coordinators = [] :: [atom()]
                }).
 
 -include("riak_kv_dtrace.hrl").
 
 -define(PARSE_INDEX_PRECOMMIT, {struct, [{<<"mod">>, <<"riak_index">>}, {<<"fun">>, <<"parse_object_hook">>}]}).
 -define(DEFAULT_TIMEOUT, 60000).
+-define(MIN_COORD_TIMEOUT, 3000).
 
 %% ===================================================================
 %% Public API
@@ -176,20 +174,11 @@ start(From, RObj, PutOptions) ->
     end.
 
 %% Included for backward compatibility, in case someone is, say, passing around
-%% a riak_client instace between nodes during a rolling upgrade. The old
+%% a riak_client instance between nodes during a rolling upgrade. The old
 %% `start_link' function has been renamed `start' since it doesn't actually link
 %% to the caller.
 start_link(From, Object, PutOptions) -> start(From, Object, PutOptions).
 
-set_put_coordinator_failure_timeout(MS) when is_integer(MS), MS >= 0 ->
-    application:set_env(riak_kv, put_coordinator_failure_timeout, MS);
-set_put_coordinator_failure_timeout(Bad) ->
-    ?LOG_ERROR("~s:set_put_coordinator_failure_timeout(~p) invalid",
-                [?MODULE, Bad]),
-    set_put_coordinator_failure_timeout(3000).
-
-get_put_coordinator_failure_timeout() ->
-    app_helper:get_env(riak_kv, put_coordinator_failure_timeout, 3000).
 
 make_ack_options(Options) ->
     AckOption = get_option(ack_execute, Options),
@@ -219,6 +208,7 @@ spawn_coordinator_proc(CoordNode, Mod, Fun, Args) ->
 monitor_remote_coordinator(false = _UseAckP, _MiddleMan, _CoordNode, StateData) ->
     {stop, normal, StateData};
 monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, StateData) ->
+    TO = app_helper:get_env(riak_kv, put_coordinator_failure_timeout, 3000),
     receive
         {ack, CoordNodeFinal, now_executing} ->
             case CoordNodeFinal of
@@ -229,7 +219,7 @@ monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, StateData) ->
                                   [CoordNodeFinal, CoordNode])
             end,
             {stop, normal, StateData}
-    after StateData#state.coordinator_timeout ->
+    after TO ->
             exit(MiddleMan, kill),
             Bad = StateData#state.bad_coordinators,
             ?LOG_WARNING("timed out waiting for forward-ack, adding ~p to bad coordinators",
@@ -269,7 +259,6 @@ test_link(From, Object, PutOptions, StateProps) ->
 %% @private
 init([From, RObj, Options0, Bucket, BucketProps]) ->
     Key = riak_object:key(RObj),
-    CoordTimeout = get_put_coordinator_failure_timeout(),
     Trace = app_helper:get_env(riak_kv, fsm_trace_enabled),
     Options = proplists:unfold(Options0),
     StateData =
@@ -280,7 +269,6 @@ init([From, RObj, Options0, Bucket, BucketProps]) ->
             trace = Trace,
             options = Options,
             timing = riak_kv_fsm_timing:add_timing(prepare, []),
-            coordinator_timeout=CoordTimeout,
             bucket_props = BucketProps
         },
     gen_fsm:send_event(self(), timeout),

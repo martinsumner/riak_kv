@@ -4265,7 +4265,7 @@ encode_and_put(
     Obj, Mod, Bucket, Key, IndexSpecs, ModState, MaxCheckFlag, Coord, Sync
 ) ->
     DoMaxCheck = MaxCheckFlag == do_max_check,
-    case sibling_check(MaxCheckFlag == do_max_check, Coord, Obj) of
+    case sibling_check(DoMaxCheck, Coord, Obj) of
         {too_many_siblings, NumSiblings} ->
             ?LOG_ERROR(
                 "Put failure: too many siblings for object ~p/~p (~p)",
