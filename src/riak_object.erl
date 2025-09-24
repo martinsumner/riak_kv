@@ -38,10 +38,10 @@
 -type bucket() :: binary() | {binary(), binary()}.
 %% -type bkey() :: {bucket(), key()}.
 -type value() :: term().
--type riak_object_dict() :: dict:dict()|maps:map().
+-type riak_object_meta() :: dict:dict()|map().
 
 -record(r_content, {
-          metadata :: riak_object_dict(),
+          metadata :: riak_object_meta(),
           value :: term()
          }).
 
@@ -59,7 +59,7 @@
           key :: key(),
           contents :: list(r_content()),
           vclock = vclock:fresh() :: vclock:vclock(),
-          updatemetadata=metadata_store(clean, true, metadata_new()) :: riak_object_dict(),
+          updatemetadata=metadata_store(clean, true, metadata_new()) :: riak_object_meta(),
           updatevalue :: term()
          }).
 -record(p_object, {
@@ -128,7 +128,7 @@ new(B, K, V) when is_binary(B), is_binary(K) ->
 
 %% @doc Constructor for new riak objects with an initial content-type.
 -spec new(Bucket::bucket(), Key::key(), Value::value(),
-          string() | riak_object_dict() | no_initial_metadata) -> riak_object().
+          string() | riak_object_meta() | no_initial_metadata) -> riak_object().
 new({T, B}, K, V, C) when is_binary(T), is_binary(B), is_binary(K), is_list(C) ->
     new_int({T, B}, K, V, metadata_fromlist([{?MD_CTYPE, C}]));
 new(B, K, V, C) when is_binary(B), is_binary(K), is_list(C) ->
@@ -218,58 +218,57 @@ metadata_fromlist(MetaList) ->
     dict:from_list(MetaList).
 
 -else.
--spec metadata_new() -> maps:map().
+-spec metadata_new() -> map().
 metadata_new() ->
     maps:new().
 
--spec metadata_fromlist(list({metadata_key(), metadata_value()})) -> maps:map().
+-spec metadata_fromlist(list({metadata_key(), metadata_value()})) -> map().
 metadata_fromlist(MetaList) ->
     maps:from_list(MetaList).
 -endif.
 
 -spec metadata_store(
-    metadata_key(), metadata_value(), maps:map()|dict:dict()) ->
-        maps:map()|dict:dict().
+    metadata_key(), metadata_value(), riak_object_meta())
+        -> riak_object_meta().
 metadata_store(Key, Value, MetaAsMap) when is_map(MetaAsMap) ->
     maps:put(Key, Value, MetaAsMap);
 metadata_store(Key, Value, Meta) ->
     dict:store(Key, Value, Meta).
 
 -spec metadata_tolist(
-    dict:dict()|maps:map()) ->
+    riak_object_meta()) ->
         list({metadata_key(), metadata_value()}).
 metadata_tolist(MetaAsMap) when is_map(MetaAsMap) ->
     maps:to_list(MetaAsMap);
 metadata_tolist(Meta) ->
     dict:to_list(Meta).
 
--spec metadata_fetch(metadata_key(), dict:dict()|maps:map()) -> metadata_value().
+-spec metadata_fetch(metadata_key(), riak_object_meta()) -> metadata_value().
 metadata_fetch(Key, MetaAsMap) when is_map(MetaAsMap) ->
     maps:get(Key, MetaAsMap);
 metadata_fetch(Key, Meta) ->
     dict:fetch(Key, Meta).
 
--spec metadata_find(metadata_key(), dict:dict()|maps:map()) -> metadata_value().
+-spec metadata_find(metadata_key(), riak_object_meta()) -> metadata_value().
 metadata_find(Key, MetaAsMap) when is_map(MetaAsMap) ->
     maps:find(Key, MetaAsMap);
 metadata_find(Key, Meta) ->
     dict:find(Key, Meta).
 
--spec metadata_iskey(metadata_key(), dict:dict()|maps:map()) -> boolean().
+-spec metadata_iskey(metadata_key(), riak_object_meta()) -> boolean().
 metadata_iskey(Key, MetaAsMap) when is_map(MetaAsMap) ->
     maps:is_key(Key, MetaAsMap);
 metadata_iskey(Key, Meta) ->
     dict:is_key(Key, Meta).
 
--spec metadata_keycount(dict:dict()|maps:map()) -> non_neg_integer().
+-spec metadata_keycount(riak_object_meta()) -> non_neg_integer().
 metadata_keycount(MetaAsMap) when is_map(MetaAsMap) ->
     maps:size(MetaAsMap);
 metadata_keycount(Meta) ->
     dict:size(Meta).
 
 -spec metadata_erase(
-    metadata_key(), dict:dict()|maps:map()) ->
-        dict:dict()|maps:map().
+    metadata_key(), riak_object_meta()) -> riak_object_meta().
 metadata_erase(Key, MetaAsMap) when is_map(MetaAsMap) ->
     maps:remove(Key, MetaAsMap);
 metadata_erase(Key, Meta) ->
@@ -278,7 +277,7 @@ metadata_erase(Key, Meta) ->
 -spec metadata_fold(
     fun((metadata_key(), metadata_value(), any()) -> any()),
     any(),
-    maps:map()|dict:dict()) ->
+    riak_object_meta()) ->
         any().
 metadata_fold(FoldFun, InitAcc, MetaAsMap) when is_map(MetaAsMap) ->
     maps:fold(FoldFun, InitAcc, MetaAsMap);
@@ -822,7 +821,7 @@ merge_acc_to_contents(Bucket, MergeAcc) ->
 %% just a {binary(), pos_integer()} pair.
 %%
 %% @see vclock:destructure_dot/1
--spec get_dot(riak_object_dict()) ->
+-spec get_dot(riak_object_meta()) ->
         {ok, {vclock:dot(), vclock:pure_dot()}} | undefined.
 get_dot(Dict) ->
     case metadata_find(?DOT, Dict) of
@@ -909,7 +908,7 @@ value_count(#p_object{r_object=RObj}) -> value_count(RObj).
 
 %% @doc  Return the contents (a list of {metadata, value} tuples) for
 %%       this riak_object.
--spec get_contents(riak_object()|proxy_object()) -> [{riak_object_dict(), value()}].
+-spec get_contents(riak_object()|proxy_object()) -> [{riak_object_meta(), value()}].
 get_contents(#r_object{contents=Contents}) ->
     [{Content#r_content.metadata, Content#r_content.value} ||
         Content <- Contents];
@@ -922,7 +921,7 @@ get_contents(#p_object{r_object=RObj, proxy=P}) ->
 %% @doc  Assert that this riak_object has no siblings and return its associated
 %%       metadata.  This function will fail with a badmatch error if the
 %%       object has siblings (value_count() > 1).
--spec get_metadata(riak_object()|proxy_object()) -> riak_object_dict().
+-spec get_metadata(riak_object()|proxy_object()) -> riak_object_meta().
 get_metadata(O=#r_object{}) ->
     % this blows up intentionally (badmatch) if more than one content value!
     [{Metadata,_V}] = get_contents(O),
@@ -932,7 +931,7 @@ get_metadata(#p_object{r_object=RObj}) ->
     Content#r_content.metadata.
 
 %% @doc  Return a list of the metadata values for this riak_object.
--spec get_metadatas(riak_object()|proxy_object()) -> [riak_object_dict()].
+-spec get_metadatas(riak_object()|proxy_object()) -> [riak_object_meta()].
 get_metadatas(#r_object{contents=Contents}) ->
     [Content#r_content.metadata || Content <- Contents];
 get_metadatas(#p_object{r_object=RObj}) ->
@@ -1019,7 +1018,7 @@ vclock_hash(Obj=#r_object{}) ->
     term_to_binary(Hash).
 
 %% @doc  Set the updated metadata of an object to M.
--spec update_metadata(riak_object(), riak_object_dict()) -> riak_object().
+-spec update_metadata(riak_object(), riak_object_meta()) -> riak_object().
 update_metadata(Object=#r_object{}, M) ->
     Object#r_object{updatemetadata=metadata_erase(clean, M)}.
 
@@ -1028,7 +1027,7 @@ update_metadata(Object=#r_object{}, M) ->
 update_value(Object=#r_object{}, V) -> Object#r_object{updatevalue=V}.
 
 %% @doc  Return the updated metadata of this riak_object.
--spec get_update_metadata(riak_object()) -> riak_object_dict().
+-spec get_update_metadata(riak_object()) -> riak_object_meta().
 get_update_metadata(#r_object{updatemetadata=UM}) -> UM.
 
 %% @doc  Return the updated value of this riak_object.
@@ -1182,7 +1181,7 @@ assemble_index_specs(Indexes, IndexOp) ->
 %%       {Metadata, Value} pairs in MVs. Normal clients should use the
 %%       set_update_[value|metadata]() + apply_updates() method for changing
 %%       object contents.
--spec set_contents(riak_object(), [{riak_object_dict(), value()}]) -> riak_object().
+-spec set_contents(riak_object(), [{riak_object_meta(), value()}]) -> riak_object().
 set_contents(Object=#r_object{}, MVs) when is_list(MVs) ->
     Object#r_object{contents=[#r_content{metadata=M,value=V} || {M, V} <- MVs]}.
 
