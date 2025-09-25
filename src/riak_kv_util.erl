@@ -158,11 +158,19 @@ make_request(Request, Index) ->
                                         {fsm, undefined, self()},
                                         Index).
 
-get_bucket_option(Type, BucketProps) ->
-    case lists:keyfind(Type, 1, BucketProps) of
-        {Type, Val} -> Val;
+get_bucket_option(Name, BucketProps) when is_map(BucketProps) ->
+    case maps:get(Name, BucketProps, undefined) of
+        undefined ->
+            get_default_bucket_option(Name);
+        Val ->
+            Val
+    end;
+get_bucket_option(Name, BucketProps) ->
+    case lists:keyfind(Name, 1, BucketProps) of
+        {Name, Val} ->
+            Val;
         _ ->
-            get_default_bucket_option(Type)
+            get_default_bucket_option(Name)
     end.
 
 get_default_bucket_option(Type) ->

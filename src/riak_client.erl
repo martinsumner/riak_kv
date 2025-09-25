@@ -27,6 +27,7 @@
 -export([new/2]).
 -export([get/3,get/4,get/5]).
 -export([put/2,put/3]).
+-export([put/4,put/5,put/6]).
 -export([delete/3,delete/4,delete/5,reap/3,reap/4]).
 -export([delete_vclock/4,delete_vclock/5,delete_vclock/6]).
 -export([list_keys/2,list_keys/3,list_keys/4]).
@@ -388,7 +389,7 @@ put(RObj, {?MODULE, [_Node, _ClientId]}=THIS) ->
     {error, {n_val_violation, N::integer()}} |
     {error, Err :: term()}.
 %% @doc Store RObj in the cluster.
-put(RObj, Options, {?MODULE, [Node, ClientId]}) ->
+put(RObj, Options, {?MODULE, [Node, ClientId]}) when is_list(Options) ->
     Me = self(),
     ReqId = mk_reqid(),
     {Opts0, RObj0} =
@@ -398,7 +399,21 @@ put(RObj, Options, {?MODULE, [Node, ClientId]}) ->
         ClientId ->
             {[asis|Options], riak_object:increment_vclock(RObj, ClientId)}
     end,
-    case riak_kv_put_fsm:start({raw, ReqId, Me}, RObj0, Opts0) of
+    R =
+        case node() of
+            Node ->
+                riak_kv_put_fsm:start({raw, ReqId, Me}, RObj0, Opts0);
+            _ ->
+                %% This is required when riak_test (or anything) calls
+                %% riak_client direct
+                proc_lib:spawn_link(
+                    Node,
+                    riak_kv_put_fsm,
+                    start_link,
+                    [{raw, ReqId, Me}, RObj, Options]
+                )
+        end,
+    case R of
         consistent ->
             consistent_put(RObj, Options, {?MODULE, [Node, ClientId]});
         write_once ->
@@ -406,7 +421,22 @@ put(RObj, Options, {?MODULE, [Node, ClientId]}) ->
         _ ->
             Timeout = recv_timeout(Options),
             wait_for_reqid(ReqId, Timeout)
-    end.
+    end;
+%% @doc deprecated - but required in riak_test
+put(RObj, W, {?MODULE, [_Node, _ClientId]}=THIS) ->
+    put(RObj, [{w, W}, {dw, W}], THIS).
+
+%% @doc deprecated - but required in riak_test
+put(RObj, W, DW, {?MODULE, [_Node, _ClientId]}=THIS) ->
+    put(RObj, [{w, W}, {dw, DW}], THIS).
+
+%% @doc deprecated - but required in riak_test
+put(RObj, W, DW, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
+    put(RObj,  [{w, W}, {dw, DW}, {timeout, Timeout}], THIS).
+
+%% @doc deprecated - but required in riak_test
+put(RObj, W, DW, Timeout, Options, {?MODULE, [_Node, _ClientId]}=THIS) ->
+    put(RObj, [{w, W}, {dw, DW}, {timeout, Timeout} | Options], THIS).
 
 consistent_put(RObj, Options, {?MODULE, [Node, _ClientId]}) ->
     Bucket = riak_object:bucket(RObj),
