@@ -4984,4 +4984,81 @@ rollover_test_() ->
     }.
 
 
+proplist_fetcher(DProps) ->
+    {
+        proplists:get_value(dvv_enabled, DProps, true),
+        proplists:get_value(write_once, DProps, false),
+        proplists:get_value(allow_mult, DProps, undefined)
+    }.
+
+map_fetcher(DProps) ->
+    M = maps:from_list(DProps),
+    {
+        maps:get(dvv_enabled, M, true),
+        maps:get(write_once, M, false),
+        maps:get(allow_mult, M, undefined)
+    }.
+
+speed_test() ->
+    %% What is the fastest way of getting three bucket properties?
+    %% On my machine - Speed compare 9239 10455 26193
+    DefaultProps =
+        [
+            {node_confirms,0},
+            {dvv_enabled,false},
+            {allow_mult,false},
+            {linkfun,{modfun,riak_kv_wm_link_walker,mapreduce_linkfun}},
+            {old_vclock,86400},
+            {young_vclock,20},
+            {big_vclock,50},
+            {small_vclock,50},
+            {pr,0},
+            {r,quorum},
+            {w,quorum},
+            {pw,0},
+            {dw,quorum},
+            {rw,quorum},
+            {sync_on_write,backend},
+            {basic_quorum,false},
+            {notfound_ok,true},
+            {n_val,3},
+            {last_write_wins,false},
+            {precommit,[]},
+            {postcommit,[]},
+            {chash_keyfun,{riak_core_util,chash_std_keyfun}}
+        ],
+    
+        {TC0, R0} =
+            timer:tc(
+                fun() ->
+                    lists:map(
+                        fun(_I) -> get_put_properties(DefaultProps) end,
+                        lists:seq(1, 100000)
+                    )
+                end
+            ),
+        {TC1, R1} =
+            timer:tc(
+                fun() ->
+                    lists:map(
+                        fun(_I) -> proplist_fetcher(DefaultProps) end,
+                        lists:seq(1, 100000)
+                    )
+                end
+            ),
+        {TC2, R2} =
+            timer:tc(
+                fun() ->
+                    lists:map(
+                        fun(_I) -> map_fetcher(DefaultProps) end,
+                        lists:seq(1, 100000)
+                    )
+                end
+            ),
+        ?assertMatch(R0, R1),
+        ?assertMatch(R0, R2),
+        io:format(user, "Speed compare ~w ~w ~w~n", [TC0, TC1, TC2])
+    .
+
+
 -endif.
