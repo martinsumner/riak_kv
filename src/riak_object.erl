@@ -113,7 +113,15 @@
 -export([spoof_getdeletedobject/1]).
 -export([delete_hash/1]).
 -export([obj_not_deleted/1]).
--export([metadata_new/0, metadata_fetch/2, metadata_erase/2, metadata_store/3, metadata_find/2]).
+-export(
+    [
+        metadata_new/0,
+        metadata_fetch/2,
+        metadata_erase/2,
+        metadata_store/3,
+        metadata_find/2,
+        metadata_fromlist/1
+    ]).
 
 -ifdef(TEST).
 -export([convert_object_to_headonly/3]). % Used in unit testing of get_core
@@ -207,25 +215,36 @@ equal_contents([C1|R1],[C2|R2]) ->
 
 -type metadata_key() :: atom()|binary().
 -type metadata_value() :: any().
+-type metadata_version() :: v0|v1.
 
+-spec metadata_version() -> metadata_version().
 -ifdef(TEST).
--spec metadata_new() -> dict:dict().
-metadata_new() ->
-    dict:new().
-
--spec metadata_fromlist(list({metadata_key(), metadata_value()})) -> dict:dict().
-metadata_fromlist(MetaList) ->
-    dict:from_list(MetaList).
-
+metadata_version() -> v0.
 -else.
--spec metadata_new() -> map().
+metadata_version() ->
+    application:get_env(riak_kv, metadata_version, v0).
+-endif.
+
+
+-spec metadata_new() -> riak_object_meta().
 metadata_new() ->
+    metadata_new(metadata_version()).
+
+metadata_new(v0) ->
+    dict:new();
+metadata_new(v1) ->
     maps:new().
 
--spec metadata_fromlist(list({metadata_key(), metadata_value()})) -> map().
+-spec metadata_fromlist(
+    list({metadata_key(), metadata_value()})) ->
+        riak_object_meta().
 metadata_fromlist(MetaList) ->
+    metadata_fromlist(metadata_version(), MetaList).
+
+metadata_fromlist(v0, MetaList) ->
+    dict:from_list(MetaList);
+metadata_fromlist(v1, MetaList) ->
     maps:from_list(MetaList).
--endif.
 
 -spec metadata_store(
     metadata_key(), metadata_value(), riak_object_meta())
