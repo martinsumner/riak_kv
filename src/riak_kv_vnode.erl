@@ -2918,8 +2918,8 @@ get_put_options(Options) ->
 
 get_put_options([], RR, CD, SW, RB, CO, BP) ->
     {RR, CD, SW, RB, CO, BP};
-get_put_options([{rr, RR}|Opts], _RR, CD, SW, RB, CO, BP) ->
-    get_put_options(Opts, RR, CD, SW, RB, CO, BP);
+get_put_options([rr|Opts], _RR, CD, SW, RB, CO, BP) ->
+    get_put_options(Opts, true, CD, SW, RB, CO, BP);
 get_put_options([coord|Opts], RR, _CD, SW, RB, CO, BP) ->
     get_put_options(Opts, RR, true, SW, RB, CO, BP);
 get_put_options([{sync_on_write, SW}|Opts], RR, CD, _SW, RB, CO, BP) ->
@@ -4265,7 +4265,7 @@ encode_and_put(
     Obj, Mod, Bucket, Key, IndexSpecs, ModState, MaxCheckFlag, Coord, Sync
 ) ->
     DoMaxCheck = MaxCheckFlag == do_max_check,
-    case sibling_check(MaxCheckFlag == do_max_check, Coord, Obj) of
+    case sibling_check(DoMaxCheck, Coord, Obj) of
         {too_many_siblings, NumSiblings} ->
             ?LOG_ERROR(
                 "Put failure: too many siblings for object ~p/~p (~p)",
@@ -4288,7 +4288,7 @@ encode_and_put(
                     %% and errors themselves.
                     Mod:put_object(Bucket, Key, IndexSpecs, Obj, ModState);
                 false ->
-                    ObjFmt = object_format(Mod, ModState),
+                    ObjFmt = ?CAP_OBJECT_FORMAT,
                     EncodedVal = riak_object:to_binary(ObjFmt, Obj),
                     case size_check(DoMaxCheck, Coord, EncodedVal) of
                         {too_large, BinSize} ->
@@ -4326,7 +4326,8 @@ encode_and_put(
             end
     end.
 
-size_check(_, false, _EncodedVal) ->
+size_check(true, false, _EncodedVal) ->
+    % No need to do the check - the coordinator will check
     ok;
 size_check(true, true, EncodedVal) ->
     BinSize = size(EncodedVal),
@@ -4337,7 +4338,7 @@ size_check(true, true, EncodedVal) ->
         false ->
             size_check(false, true, BinSize)
     end;
-size_check(false, true, BinSize) when is_integer(BinSize) ->
+size_check(false, _Coord, BinSize) when is_integer(BinSize) ->
     WarnSize = app_helper:get_env(riak_kv, warn_object_size),
     case BinSize > WarnSize of
         true ->
@@ -4345,11 +4346,12 @@ size_check(false, true, BinSize) when is_integer(BinSize) ->
         false ->
             ok
     end;
-size_check(false, true, EncodedVal) ->
+size_check(false, Coord, EncodedVal) ->
     BinSize = size(EncodedVal),
-    size_check(false, true, BinSize).
+    size_check(false, Coord, BinSize).
 
-sibling_check(_, false, _Obj) ->
+sibling_check(true, false, _Obj) ->
+    % No need to do the check - the coordinator will check
     ok;
 sibling_check(true, true, Obj) ->
     NumSiblings = riak_object:value_count(Obj),
@@ -4360,7 +4362,7 @@ sibling_check(true, true, Obj) ->
         false ->
             sibling_check(false, true, NumSiblings)
     end;
-sibling_check(false, true, NumSiblings) when is_integer(NumSiblings) ->
+sibling_check(false, _Coord, NumSiblings) when is_integer(NumSiblings) ->
     WarnSiblings = app_helper:get_env(riak_kv, warn_siblings),
     case NumSiblings > WarnSiblings of
         true ->
@@ -4368,9 +4370,9 @@ sibling_check(false, true, NumSiblings) when is_integer(NumSiblings) ->
         false ->
             ok
     end;
-sibling_check(false, true, Obj) ->
+sibling_check(false, Coord, Obj) ->
     NumSiblings = riak_object:value_count(Obj),
-    sibling_check(false, true, NumSiblings).
+    sibling_check(false, Coord, NumSiblings).
 
 -spec select_put_fun(Mod::term(), ModState::term(), Sync::boolean()) -> fun().
 select_put_fun(Mod, ModState, Sync) ->
@@ -4390,15 +4392,6 @@ select_put_fun(Mod, ModState, Sync) ->
 uses_r_object(Mod, ModState, Bucket) ->
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     lists:member(uses_r_object, Capabilities).
-
-object_format(Mod, ModState) ->
-    {ok, Capabilities} = Mod:capabilities(ModState),
-    case lists:member(always_v1obj, Capabilities) of
-        true ->
-            v1;
-        false ->
-            ?CAP_OBJECT_FORMAT
-    end.
 
 sanitize_bkey({{<<"default">>, B}, K}) ->
     {B, K};
@@ -4990,9 +4983,5 @@ rollover_test_() ->
              ]}
     }.
 
-always_v1_test() ->
-    % Confirm that the leveled backend will always be a v1 object
-    ObjFmt = object_format(riak_kv_leveled_backend, undefined),
-    ?assertEqual(v1, ObjFmt).
 
 -endif.
