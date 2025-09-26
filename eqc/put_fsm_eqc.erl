@@ -278,7 +278,7 @@ prop_basic_put() ->
                             [
                                 {starttime, riak_core_util:moment()},
                                 {n, N},
-                                {bucket_props, BucketProps},
+                                {bucket_props_list, BucketProps},
                                 {preflist2, PL2},
                                 {coord_pl_entry, CoordPLEntry}
                             ]
