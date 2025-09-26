@@ -3115,18 +3115,19 @@ prepare_put_existing_object(#state{idx =Idx} = State,
     end.
 
 get_put_properties(BProps) ->
-    get_put_properties(BProps, true, false, undefined).
+    {
+        keyfind(dvv_enabled, BProps, true),
+        keyfind(write_once, BProps, false),
+        keyfind(allow_mult, BProps, undefined)
+    }.
 
-get_put_properties([], DVV, WriteOnce, AM) ->
-    {DVV, WriteOnce, AM};
-get_put_properties([{dvv_enabled, DVV}|Props], _DVV, WriteOnce, AM) ->
-    get_put_properties(Props, DVV, WriteOnce, AM);
-get_put_properties([{write_once, WriteOnce}|Props], DVV, _WriteOnce, AM) ->
-    get_put_properties(Props, DVV, WriteOnce, AM);
-get_put_properties([{allow_mult, AM}|Props], DVV, WriteOnce, _AM) ->
-    get_put_properties(Props, DVV, WriteOnce, AM);
-get_put_properties([_Prop|Props], DVV, WriteOnce, AM) ->
-    get_put_properties(Props, DVV, WriteOnce, AM).
+keyfind(Key, BProps, Default) when is_atom(Key) ->
+    case lists:keyfind(Key, 1, BProps) of
+        {Key, Value} ->
+            Value;
+        _ ->
+            Default
+    end.
 
 determine_put_result({error, E}, _, Idx, PutArgs, State, _IndexSpecs, _IndexBackend) ->
     {{fail, Idx, E}, PutArgs, State};
@@ -4982,6 +4983,116 @@ rollover_test_() ->
                end}
              ]}
     }.
+
+roll_put_properties(BProps) ->
+    roll_put_properties(BProps, true, false, undefined).
+
+roll_put_properties([], DVV, WriteOnce, AM) ->
+    {DVV, WriteOnce, AM};
+roll_put_properties([{dvv_enabled, DVV}|Props], _DVV, WriteOnce, AM) ->
+    roll_put_properties(Props, DVV, WriteOnce, AM);
+roll_put_properties([{write_once, WriteOnce}|Props], DVV, _WriteOnce, AM) ->
+    roll_put_properties(Props, DVV, WriteOnce, AM);
+roll_put_properties([{allow_mult, AM}|Props], DVV, WriteOnce, _AM) ->
+    roll_put_properties(Props, DVV, WriteOnce, AM);
+roll_put_properties([_Prop|Props], DVV, WriteOnce, AM) ->
+    roll_put_properties(Props, DVV, WriteOnce, AM).
+
+keyfind_fetcher(DProps) ->
+    {
+        keyfind(dvv_enabled, DProps, true),
+        keyfind(write_once, DProps, false),
+        keyfind(allow_mult, DProps, undefined)
+    }.
+
+proplist_fetcher(DProps) ->
+    {
+        proplists:get_value(dvv_enabled, DProps, true),
+        proplists:get_value(write_once, DProps, false),
+        proplists:get_value(allow_mult, DProps, undefined)
+    }.
+
+map_fetcher(DProps) ->
+    M = maps:from_list(DProps),
+    {
+        maps:get(dvv_enabled, M, true),
+        maps:get(write_once, M, false),
+        maps:get(allow_mult, M, undefined)
+    }.
+
+speed_test() ->
+    %% What is the fastest way of getting three bucket properties?
+    %% On my machine - Speed compare 9239 10455 26193
+    DefaultProps =
+        [
+            {node_confirms,0},
+            {dvv_enabled,false},
+            {allow_mult,false},
+            {linkfun,{modfun,riak_kv_wm_link_walker,mapreduce_linkfun}},
+            {old_vclock,86400},
+            {young_vclock,20},
+            {big_vclock,50},
+            {small_vclock,50},
+            {pr,0},
+            {r,quorum},
+            {w,quorum},
+            {pw,0},
+            {dw,quorum},
+            {rw,quorum},
+            {sync_on_write,backend},
+            {basic_quorum,false},
+            {notfound_ok,true},
+            {n_val,3},
+            {last_write_wins,false},
+            {precommit,[]},
+            {postcommit,[]},
+            {chash_keyfun,{riak_core_util,chash_std_keyfun}}
+        ],
+    
+    {TC0, R0} =
+        timer:tc(
+            fun() ->
+                lists:map(
+                    fun(_I) -> roll_put_properties(DefaultProps) end,
+                    lists:seq(1, 100000)
+                )
+            end
+        ),
+    {TC1, R1} =
+        timer:tc(
+            fun() ->
+                lists:map(
+                    fun(_I) -> proplist_fetcher(DefaultProps) end,
+                    lists:seq(1, 100000)
+                )
+            end
+        ),
+    {TC2, R2} =
+        timer:tc(
+            fun() ->
+                lists:map(
+                    fun(_I) -> map_fetcher(DefaultProps) end,
+                    lists:seq(1, 100000)
+                )
+            end
+        ),
+    {TC3, R3} =
+        timer:tc(
+            fun() ->
+                lists:map(
+                    fun(_I) -> keyfind_fetcher(DefaultProps) end,
+                    lists:seq(1, 100000)
+                )
+            end
+        ),
+    ?assertMatch(R0, R1),
+    ?assertMatch(R0, R2),
+    ?assertMatch(R0, R3),
+    io:format(
+        user,
+        "Speed compare ~w ~w ~w ~w~n",
+        [TC0, TC1, TC2, TC3]
+    ).
 
 
 -endif.
