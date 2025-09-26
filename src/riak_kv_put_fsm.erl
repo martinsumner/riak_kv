@@ -128,8 +128,7 @@
                 allowmult = true :: boolean(),
                 precommit=[] :: list(),
                 postcommit=[] :: list(),
-                bucket_props_map :: #{atom() => any()},
-                bucket_props_list :: list({atom(),any()}),
+                bucket_props :: list({atom(),any()}),
                 putcore :: riak_kv_put_core:putcore() | undefined,
                 timing = [] :: [{atom(), {non_neg_integer(), non_neg_integer(),
                                           non_neg_integer()}}],
@@ -156,17 +155,16 @@
         consistent|write_once|{ok, pid()}|{error, overload}.
 start(From, RObj, PutOptions) ->
     Bucket = riak_object:bucket(RObj),
-    BucketPropsL = riak_kv_util:get_bucket_props(Bucket),
-    BucketPropsM = maps:from_list(BucketPropsL),
+    BucketProps = riak_kv_util:get_bucket_props(Bucket),
     case {
-        maps:get(consistent, BucketPropsM, false),
-        maps:get(write_once, BucketPropsM, false)} of
+        get_option(consistent, BucketProps, false),
+        get_option(write_once, BucketProps, false)} of
         {true, _} ->
             consistent;
         {false, true} ->
             write_once;
         _ ->
-            Args = [From, RObj, PutOptions, Bucket, BucketPropsM, BucketPropsL],
+            Args = [From, RObj, PutOptions, Bucket, BucketProps],
             StartSideJob =
                 sidejob_supervisor:start_child(
                     riak_kv_put_fsm_sj, gen_fsm, start_link, [?MODULE, Args, []]
@@ -249,14 +247,13 @@ monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, StateData) ->
 %% As test, but linked to the caller
 test_link(From, Object, PutOptions, StateProps) ->
     Bucket = riak_object:bucket(Object),
-    {bucket_props_list, BProps} =
-        lists:keyfind(bucket_props_list, 1, StateProps),
-    BucketPropsM = maps:from_list(BProps),
+    {bucket_props, BProps} =
+        lists:keyfind(bucket_props, 1, StateProps),
     gen_fsm:start_link(
         ?MODULE,
         {
             test,
-            [From, Object, PutOptions, Bucket, BucketPropsM, BProps],
+            [From, Object, PutOptions, Bucket, BProps],
             StateProps
         },
         []
@@ -270,7 +267,7 @@ test_link(From, Object, PutOptions, StateProps) ->
 %% ====================================================================
 
 %% @private
-init([From, RObj, Options0, Bucket, BucketPropsM, BucketPropsL]) ->
+init([From, RObj, Options0, Bucket, BucketPropsL]) ->
     Key = riak_object:key(RObj),
     Trace = app_helper:get_env(riak_kv, fsm_trace_enabled),
     Options = proplists:unfold(Options0),
@@ -282,8 +279,7 @@ init([From, RObj, Options0, Bucket, BucketPropsM, BucketPropsL]) ->
             trace = Trace,
             options = Options,
             timing = riak_kv_fsm_timing:add_timing(prepare, []),
-            bucket_props_map = BucketPropsM,
-            bucket_props_list = BucketPropsL
+            bucket_props = BucketPropsL
         },
     gen_fsm:send_event(self(), timeout),
     case Trace of
@@ -328,7 +324,7 @@ prepare(
         State=#state{
             bkey = {Bucket, Key},
             options=Options,
-            bucket_props_map=BucketProps
+            bucket_props=BucketProps
         }
     ) ->
     StatTracked = get_option(stat_tracked, BucketProps, false),
@@ -370,8 +366,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                       options = Options,
                                       robj = RObj0,
                                       n=N,
-                                      bucket_props_map = BucketProps,
-                                      bucket_props_list = LegacyProps,
+                                      bucket_props = BucketProps,
                                       trace = Trace,
                                       preflist2 = Preflist2}) ->
     
@@ -432,12 +427,12 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                 case {ReturnBody, Postcommit} of
                     {false, []} ->
                         [
-                            {bucket_props, LegacyProps}
+                            {bucket_props, BucketProps}
                         ];
                     _ ->
                         [
                             {returnbody, true},
-                            {bucket_props, LegacyProps}
+                            {bucket_props, BucketProps}
                         ]
                 end,
             RObj = apply_updates(RObj0, ULM),
@@ -449,7 +444,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                             vclock:prune(
                                 Clock,
                                 riak_core_util:moment(),
-                                LegacyProps
+                                BucketProps
                             ),
                         case {length(MaybePrunedClock), length(Clock)} of
                             {PVL, UPVL} when PVL < UPVL ->
@@ -1091,15 +1086,13 @@ get_hooks(postcommit, BucketProps, State) ->
     CondHooks =
         riak_kv_hooks:get_conditional_postcommit(
             State#state.bkey,
-            State#state.bucket_props_list
+            State#state.bucket_props
         ),
     BaseHooks ++ (CondHooks -- BaseHooks).
 
 get_option(Name, Options) ->
     get_option(Name, Options, undefined).
 
-get_option(Name, Options, Default) when is_map(Options) ->
-    maps:get(Name, Options, Default);
 get_option(Name, Options, Default) ->
     case lists:keyfind(Name, 1, Options) of
         {_, Val} ->
@@ -1188,7 +1181,7 @@ get_preflist({error, _Reason}=Err, _SQ, _AI, _MC, State) ->
     process_reply(Err, State);
 get_preflist(N, SQ, AI, MC, State) ->
     #state{bkey = BKey,
-           bucket_props_list=BucketProps,
+           bucket_props=BucketProps,
            bad_coordinators = BadCoordinators} = State,
 
     DocIdx = riak_core_util:chash_key(BKey, BucketProps),
