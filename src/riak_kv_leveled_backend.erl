@@ -37,7 +37,7 @@
          callback/3]).
 
 %% Extended KV Backend API
--export([head/3, fold_heads/4, return_self/1]).
+-export([head/3, fold_heads/4, return_self/1, background_put/5]).
 
 -export([generate_partition_identity/1]).
 
@@ -54,22 +54,23 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
-
 -define(RIAK_TAG, o_rkv).
--define(CAPABILITIES, [always_v1obj,
-                        head,
-                        indexes,
-                        async_fold,
-                        fold_heads,
-                        snap_prefold,
-                        flush_put,
-                        hot_backup,
-                        size,
-                        leveled]).
+-define(CAPABILITIES,
+    [
+        always_v1obj,
+        head,
+        indexes,
+        async_fold,
+        fold_heads,
+        snap_prefold,
+        flush_put,
+        async_put,
+        hot_backup,
+        size,
+        leveled
+    ]
+).
 -define(API_VERSION, 1).
--define(BUCKET_SDG, <<"MD">>).
--define(KEY_SDG, <<"SHUDOWN_GUID">>).
--define(TAG_SDG, o).
 
 -define(PAUSE_TIME, 1).
     % The time in ms to pause if the leveled_bookie asks for backoff.
@@ -236,26 +237,36 @@ head(Bucket, Key, #state{bookie=Bookie}=State) ->
     end.
 
 %% @doc Insert an object into the leveled backend.
--spec flush_put(riak_object:bucket(),
-                    riak_object:key(),
-                    [riak_object:index_spec()],
-                    binary(),
-                    state()) ->
-                         {ok, state()} |
-                         {error, term(), state()}.
+-spec flush_put(
+    riak_object:bucket(),
+    riak_object:key(),
+    [riak_object:index_spec()],
+    binary(),
+    state()) ->
+        {ok, state()} | {error, term(), state()}.
 flush_put(Bucket, Key, IndexSpecs, Val, State) ->
-    do_put(Bucket, Key, IndexSpecs, Val, true, State).
+    do_put(Bucket, Key, IndexSpecs, Val, true, false, State).
 
+%% @doc Insert an object into the leveled backend.
+-spec background_put(
+    riak_object:bucket(),
+    riak_object:key(),
+    [riak_object:index_spec()],
+    binary(),
+    state()) ->
+        {ok, state()} | {error, term(), state()}.
+background_put(Bucket, Key, IndexSpecs, Val, State) ->
+    do_put(Bucket, Key, IndexSpecs, Val, false, true, State).
 
--spec put(riak_object:bucket(),
-                    riak_object:key(),
-                    [riak_object:index_spec()],
-                    binary(),
-                    state()) ->
-                         {ok, state()} |
-                         {error, term(), state()}.
+-spec put(
+    riak_object:bucket(),
+    riak_object:key(),
+    [riak_object:index_spec()],
+    binary(),
+    state()) ->
+        {ok, state()} | {error, term(), state()}.
 put(Bucket, Key, IndexSpecs, Val, State) ->
-    do_put(Bucket, Key, IndexSpecs, Val, false, State).
+    do_put(Bucket, Key, IndexSpecs, Val, false, false, State).
 
 
 %% @doc Delete an object from the leveled backend
@@ -660,17 +671,21 @@ callback(Ref, compact_journal, State) ->
     _ = spawn(fun() -> log_fragmentation(binary_alloc) end),
     case is_reference(Ref) of
         true ->
-             prompt_journalcompaction(State#state.bookie,
-                                        Ref,
-                                        State#state.partition,
-                                        State#state.compactions_perday,
-                                        State#state.valid_hours),
-             {ok, State}
+            prompt_journalcompaction(
+                State#state.bookie,
+                Ref,
+                State#state.partition,
+                State#state.compactions_perday,
+                State#state.valid_hours
+            ),
+            {ok, State}
     end;
 callback(Ref, UnexpectedCallback, State) ->
-    ?LOG_INFO("Ignoring unexpected callback ~w with ref ~w " ++
-                "may be expected if multi-backend",
-                [UnexpectedCallback, Ref]),
+    ?LOG_INFO(
+        "Ignoring unexpected callback ~w with ref ~w "
+        "may be expected if multi-backend",
+        [UnexpectedCallback, Ref]
+    ),
     {ok, State}.
 
 %% ===================================================================
@@ -741,25 +756,29 @@ log_fragmentation(Allocator) ->
 %% @private
 %% Complete a PUT, with the sync option true/false depending on whether 
 %% flush_put or put has been called
--spec do_put(riak_object:bucket(),
-                    riak_object:key(),
-                    [riak_object:index_spec()],
-                    binary(),
-                    boolean(),
-                    state()) ->
-                         {ok, state()} |
-                         {error, term(), state()}.
-do_put(Bucket, Key, IndexSpecs, Val, Sync, #state{bookie=Bookie}=State) ->
-    case leveled_bookie:book_put(Bookie,
-                                    Bucket, Key, Val, IndexSpecs,
-                                    ?RIAK_TAG,
-                                    infinity, Sync) of
+-spec do_put(
+    riak_object:bucket(),
+    riak_object:key(),
+    [riak_object:index_spec()],
+    binary(),
+    boolean(),
+    boolean(),
+    state()) ->
+        {ok, state()} | {error, term(), state()}.
+do_put(Bucket, Key, IndexSpecs, Val, Sync, AP, #state{bookie=Bookie}=State) ->
+    case leveled_bookie:book_put(
+            Bookie, Bucket, Key, Val, IndexSpecs, ?RIAK_TAG, infinity, Sync, AP
+        ) of
         ok ->
             {ok, State};
         pause ->
-            ?LOG_WARNING("Backend ~w paused for ~w ms in response to put",
-                            [State#state.partition,
-                                State#state.backend_pause_ms]),
+            ?LOG_WARNING(
+                "Backend ~w paused for ~w ms in response to put",
+                [
+                    State#state.partition,
+                    State#state.backend_pause_ms
+                ]
+            ),
             timer:sleep(State#state.backend_pause_ms),
             {ok, State}
     end.

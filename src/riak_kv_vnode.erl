@@ -248,24 +248,30 @@
 %% a macro, ?ELSE to use in if statements. You're welcome.
 -define(ELSE, true).
 
--record(putargs, {returnbody :: boolean(),
-                  coord:: boolean(),
-                  lww :: boolean(),
-                  bkey :: {binary(), binary()},
-                  robj :: term(),
-                  index_specs=[] :: [{index_op(), binary(), index_value()}],
-                  reqid :: non_neg_integer() | undefined,
-                  bprops :: riak_kv_bucket:props() | undefined,
-                  starttime :: non_neg_integer(),
-                  prunetime :: undefined| non_neg_integer(),
-                  readrepair=false :: boolean(),
-                  is_index=false :: boolean(), %% set if the b/end supports indexes
-                  crdt_op = undefined :: undefined | term(), %% if set this is a crdt operation
-                  hash_ops = no_hash_ops,
-                  sync_on_write = undefined :: undefined | atom(),
-                  reason = riak_kv_update_hook:reason()
-                 }).
+-record(putargs,
+    {
+        returnbody :: boolean(),
+        coord:: boolean(),
+        lww :: boolean(),
+        bkey :: {binary(), binary()},
+        robj :: term(),
+        index_specs = [] :: index_specs(),
+        reqid :: non_neg_integer() | undefined,
+        bprops :: riak_kv_bucket:props() | undefined,
+        starttime :: non_neg_integer(),
+        prunetime :: undefined| non_neg_integer(),
+        readrepair = false :: boolean(),
+        is_index = false :: boolean(), %% set if the b/end supports indexes
+        crdt_op = undefined :: undefined | term(), %% if set this is a crdt operation
+        hash_ops = no_hash_ops,
+        sync_on_write = undefined :: undefined | atom(),
+        async_put = false :: boolean(),
+        reason = riak_kv_update_hook:reason()
+    }
+).
+
 -type putargs() :: #putargs{}.
+-type index_specs() :: [{index_op(), binary(), index_value()}].
 
 -spec maybe_create_hashtrees(state()) -> state().
 maybe_create_hashtrees(State) ->
@@ -3073,7 +3079,7 @@ prepare_put_existing_object(#state{idx =Idx} = State,
                              crdt_op = CRDTOp}=PutArgs,
                             OldObj, IndexBackend, CacheData, RequiresGet) ->
     {IsNewEpoch, ActorId, State2} = maybe_new_key_epoch(Coord, State, OldObj, RObj),
-    {DVV, WriteOnce, AllowMult} = get_put_properties(BProps),
+    {DVV, WriteOnce, AllowMult, AsyncPut} = get_put_properties(BProps),
     MergeResult =
         put_merge(
             Coord,
@@ -3104,9 +3110,12 @@ prepare_put_existing_object(#state{idx =Idx} = State,
                         ObjectToStore,
                         OldObj,
                         Idx,
-                        PutArgs,
-                        State2,
-                        IndexSpecs, IndexBackend
+                        PutArgs#putargs{
+                            index_specs = IndexSpecs,
+                            is_index = IndexBackend,
+                            async_put = AsyncPut
+                        },
+                        State2
                     );
                 {error, Reason} ->
                     ?LOG_ERROR("Error on allow_mult ~w", [Reason]),
@@ -3118,7 +3127,8 @@ get_put_properties(BProps) ->
     {
         keyfind(dvv_enabled, BProps, true),
         keyfind(write_once, BProps, false),
-        keyfind(allow_mult, BProps, undefined)
+        keyfind(allow_mult, BProps, undefined),
+        keyfind(async_put, BProps, false)
     }.
 
 keyfind(Key, BProps, Default) when is_atom(Key) ->
@@ -3129,12 +3139,14 @@ keyfind(Key, BProps, Default) when is_atom(Key) ->
             Default
     end.
 
-determine_put_result({error, E}, _, Idx, PutArgs, State, _IndexSpecs, _IndexBackend) ->
+determine_put_result({error, E}, _, Idx, PutArgs, State) ->
     {{fail, Idx, E}, PutArgs, State};
-determine_put_result(ObjToStore, OldObj, _Idx, PutArgs, State, IndexSpecs, IndexBackend) ->
-    {{true, {ObjToStore, OldObj}},
-     PutArgs#putargs{index_specs = IndexSpecs,
-                     is_index    = IndexBackend}, State}.
+determine_put_result(ObjToStore, OldObj, _Idx, PutArgs, State) ->
+    {
+        {true, {ObjToStore, OldObj}},
+        PutArgs,
+        State
+    }.
 
 maybe_prune_vclock(_PruneTime=undefined, RObj, _BProps) ->
     RObj;
@@ -3173,10 +3185,21 @@ prepare_put_new_object(
             false ->
                 []
         end,
-    DVV = proplists:get_value(dvv_enabled, BProps, true),
+    DVV = keyfind(dvv_enabled, BProps, true),
+    AP = keyfind(async_put, BProps, false),
     {EpochId, State2, RObj2} = maybe_update_vclock(Coord, RObj, State, StartTime, DVV),
     RObj3 = maybe_do_crdt_update(Coord, CRDTOp, EpochId, RObj2),
-    determine_put_result(RObj3, confirmed_no_old_object, Idx, PutArgs, State2, IndexSpecs, IndexBackend).
+    determine_put_result(
+        RObj3,
+        confirmed_no_old_object,
+        Idx,
+        PutArgs#putargs{
+            index_specs = IndexSpecs,
+            is_index = IndexBackend,
+            async_put = AP
+        },
+        State2
+    ).
 
 get_old_object_or_fake(true, Bucket, Key, Mod, ModState, _CacheClock) ->
     case do_get_object(Bucket, Key, Mod, ModState) of
@@ -3270,7 +3293,8 @@ perform_put({true, {_Obj, _OldObj}=Objects},
                 readrepair=ReadRepair,
                 sync_on_write=SyncOnWrite,
                 reason=HookReason,
-                bprops = BucketProps
+                bprops = BucketProps,
+                async_put = AP
             }
         ) ->
     case ReadRepair of
@@ -3296,28 +3320,33 @@ perform_put({true, {_Obj, _OldObj}=Objects},
     {Reply, State2} =
         actual_put(
             BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag,
-            {Coord, Sync}, HookReason, BucketProps, State),
+            {Coord, Sync}, HookReason, BucketProps, AP, State),
     {Reply, State2}.
 
 actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, State) ->
     actual_put(
         BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, do_max_check,
-        {false, false}, put, undefined, State).
+        {false, false}, put, undefined, false, State).
 
-actual_put(BKey={Bucket, Key},
-            {Obj, OldObj},
-            IndexSpecs,
-            RB, ReqID,
-            MaxCheckFlag,
-            {Coord, Sync},
-            HookReason,
-            BucketProps,
-            State=#state{idx=Idx,
-                            mod=Mod,
-                            modstate=ModState,
-                            update_hook=UpdateHook}) ->
+actual_put(
+    BKey={Bucket, Key},
+    {Obj, OldObj},
+    IndexSpecs,
+    RB, ReqID,
+    MaxCheckFlag,
+    {Coord, Sync},
+    HookReason,
+    BucketProps,
+    AP,
+    State=#state{
+        idx=Idx,
+        mod=Mod,
+        modstate=ModState,
+        update_hook=UpdateHook
+    }
+) ->
     case encode_and_put(
-        Obj, Mod, Bucket, Key, IndexSpecs, ModState, MaxCheckFlag, Coord, Sync
+        Obj, Mod, Bucket, Key, IndexSpecs, ModState, MaxCheckFlag, Coord, Sync, AP
     ) of
         {{ok, UpdModState}, EncodedVal} ->
             aae_update(
@@ -4258,12 +4287,14 @@ return_encoded_binary_object(Method, EncodedObject) ->
         ModState::term(),
         MaxCheckFlag::no_max_check | do_max_check,
         Coord::boolean(),
-        Sync::boolean()) ->
-           {{ok, UpdModState::term()}, EncodedObj::binary()} |
-           {{error, Reason::term(), UpdModState::term()}, EncodedObj::binary()}.
+        Sync::boolean(),
+        AsyncPut::boolean()
+    ) ->
+        {{ok, UpdModState::term()}, EncodedObj::binary()} |
+        {{error, Reason::term(), UpdModState::term()}, EncodedObj::binary()}.
 
 encode_and_put(
-    Obj, Mod, Bucket, Key, IndexSpecs, ModState, MaxCheckFlag, Coord, Sync
+    Obj, Mod, Bucket, Key, IndexSpecs, ModState, MaxCheckFlag, Coord, Sync, AP
 ) ->
     DoMaxCheck = MaxCheckFlag == do_max_check,
     case sibling_check(DoMaxCheck, Coord, Obj) of
@@ -4313,7 +4344,7 @@ encode_and_put(
                                 _ ->
                                     ok
                             end,
-                            PutFun = select_put_fun(Mod, ModState, Sync),
+                            PutFun = select_put_fun(Mod, ModState, Sync, AP),
                             PutRet =
                                 PutFun(
                                     Bucket,
@@ -4375,18 +4406,27 @@ sibling_check(false, Coord, Obj) ->
     NumSiblings = riak_object:value_count(Obj),
     sibling_check(false, Coord, NumSiblings).
 
--spec select_put_fun(Mod::term(), ModState::term(), Sync::boolean()) -> fun().
-select_put_fun(Mod, ModState, Sync) ->
-    case Sync of
-        true ->
-            {ok, Capabilities} = Mod:capabilities(ModState),
-            case lists:member(flush_put, Capabilities) of
-                true ->
-                    fun Mod:flush_put/5;
-                _ ->
-                    fun Mod:put/5
-            end;
-        _ ->
+-spec select_put_fun(
+    Mod::term(), ModState::term(), Sync::boolean(), AP::boolean()) ->
+        fun((
+            riak_object:bucket(),
+            riak_object:key(),
+            index_specs(),
+            binary(),
+            term()
+        ) -> {ok, term()} | {error, term(), term()}).
+select_put_fun(Mod, _ModState, false, false) ->
+    fun Mod:put/5;
+select_put_fun(Mod, ModState, Sync, AP) ->
+    {ok, Capabilities} = Mod:capabilities(ModState),
+    CheckFlush = Sync andalso lists:member(flush_put, Capabilities),
+    CheckAsync = AP andalso lists:member(async_put, Capabilities),
+    case {CheckFlush, CheckAsync} of
+        {true, _} ->
+            fun Mod:flush_put/5;
+        {false, true} ->
+            fun Mod:background_put/5;
+        {false, false} ->
             fun Mod:put/5
     end.
 

@@ -31,6 +31,8 @@
 
 -include_lib("riak_kv_types.hrl").
 
+-include_lib("kernel/include/logger.hrl").
+
 -ifdef(TEST).
 -ifdef(EQC).
 -define(TOP_TEST_TYPES, ?V2_TOP_LEVEL_TYPES ++ ?V3_TOP_LEVEL_TYPES).
@@ -251,12 +253,15 @@ validate([], ValidProps, Errors) ->
     {ValidProps, Errors};
 validate([{BoolProp, MaybeBool}|T], ValidProps, Errors)
         when 
-            is_atom(BoolProp), BoolProp =:= allow_mult
+            is_atom(BoolProp),
+            BoolProp =:= allow_mult
             orelse BoolProp =:= basic_quorum
             orelse BoolProp =:= last_write_wins
             orelse BoolProp =:= notfound_ok
             orelse BoolProp =:= stat_tracked
-            orelse BoolProp =:= aae_tree_exclude ->
+            orelse BoolProp =:= aae_tree_exclude
+            orelse BoolProp =:= async_put
+         ->
     case coerce_bool(MaybeBool) of
         error ->
             validate(T, ValidProps, [{BoolProp, not_boolean}|Errors]);
@@ -310,6 +315,7 @@ validate([{sync_on_write, MaybeSync}=Prop | T], ValidProps, Errors) ->
             validate(T, ValidProps, [{sync_on_write, not_valid_sync_param} | Errors])
     end;
 validate([Prop|T], ValidProps, Errors) ->
+    ?LOG_WARNING("Attempt to add invalid property ~0p ignored", [Prop]),
     validate(T, [Prop|ValidProps], Errors).
 
 
