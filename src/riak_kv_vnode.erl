@@ -145,7 +145,7 @@
                 forward :: node() | [{integer(), node()}],
                 hashtrees :: pid() | undefined,
                 upgrade_hashtree = false :: boolean(),
-                vnode_object_cache = none :: array:array()|none,
+                vnode_object_cache = none :: ets:tid()|none,
                 vnode_object_cache_size = 0 :: non_neg_integer(),
                 counter :: #counter_state{},
                 status_mgr_pid :: pid(), %% a process that manages vnode status persistence
@@ -857,7 +857,13 @@ init([Index]) ->
         case VnodeCacheSize of
             N when is_integer(N), N > 0, N band (N - 1) == 0 ->
                 %% Vnode cache size must be a factor of 2
-                array:new([{size, N}, {fixed, true}, {default, not_cached}]);
+                ets:new(
+                    vnode_object_cache, 
+                    [
+                        set,
+                        {write_concurrency, false},
+                        {read_concurrency, false}]
+                );
             0 ->
                 none;
             InvalidN ->
@@ -1167,15 +1173,7 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
             riak_core_vnode:reply(Sender, Reply),
             case UpdVnodeCache of
                 not_changed ->
-                    {noreply, State#state{modstate=ModState3}};
-                UpdVnodeCache ->
-                    {
-                        noreply,
-                        State#state{
-                            modstate = ModState3,
-                            vnode_object_cache = UpdVnodeCache
-                        }
-                    }
+                    {noreply, State#state{modstate=ModState3}}
             end;
         false ->
             {reply, {error, {indexes_not_supported, Mod}}, State}
@@ -3014,12 +3012,7 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
         end,
     case UpdatedVnodeCache of
         not_changed ->
-            State#state{modstate = UpdModState};
-        UpdatedVnodeCache ->
-            State#state{
-                modstate = UpdModState,
-                vnode_object_cache = UpdatedVnodeCache
-            }
+            State#state{modstate = UpdModState}
     end.
 
 %% @doc
@@ -3438,15 +3431,7 @@ actual_put(
         end,
     case UpdVnodeCache of
         not_changed ->
-            {Reply, State#state{modstate = UpdModState}};
-        UpdVnodeCache ->
-            {
-                Reply,
-                State#state{
-                    modstate = UpdModState,
-                    vnode_object_cache = UpdVnodeCache
-                }
-            }
+            {Reply, State#state{modstate = UpdModState}}
     end.
 
 actual_put_tracked(BKey, {_NewObj, _OldObj} = Objs, IndexSpecs, RB, ReqId, State) ->
@@ -4554,7 +4539,7 @@ try_set_concurrency_limit(Lock, Limit, true) ->
     end.
 
 -spec maybe_check_object_cache(
-    none|array:array(),
+    none|ets:tid(),
     non_neg_integer(),
     {riak_object:bucket(), riak_object:key()},
     boolean() | list({atom(), any()})) ->
@@ -4564,8 +4549,8 @@ maybe_check_object_cache(Cache, _CacheSize, _BKey, BProps)
     not_cached;
 maybe_check_object_cache(Cache, CacheSize, BKey, true) when CacheSize > 0 ->
     Hash = erlang:phash2(BKey, CacheSize),
-    case array:get(Hash, Cache) of
-        {BKey, CachedRObj} ->
+    case ets:lookup(Cache, Hash) of
+        [{Hash, {BKey, CachedRObj}}] ->
             CachedRObj;
         _ ->
             not_cached
@@ -4581,16 +4566,17 @@ maybe_check_object_cache(Cache, CacheSize, BKey, BProps) ->
 -spec maybe_cache_object(
     {riak_object:bucket(), riak_object:key()},
     riak_object:riak_object(),
-    array:array()|none,
+    ets:tid()|none,
     non_neg_integer(),
     boolean() | list({atom(), any()}) | not_fetched) ->
-        not_changed | array:array().
+        not_changed.
 maybe_cache_object(_BKey, _RObj, Cache, _CacheSize, BProps)
         when Cache == none; BProps == false ->
     not_changed;
 maybe_cache_object(BKey, Obj, Cache, CacheSize, true) ->
     Hash = erlang:phash2(BKey, CacheSize),
-    array:set(Hash, {BKey, Obj}, Cache);
+    ets:insert(Cache, {Hash, {BKey, Obj}}),
+    not_changed;
 maybe_cache_object(BKey, RObj, Cache, CacheSize, not_fetched) ->
     maybe_cache_object(
         BKey, 
@@ -4610,18 +4596,18 @@ maybe_cache_object(BKey, RObj, Cache, CacheSize, BProps) ->
 
 -spec maybe_cache_evict(
     {riak_object:bucket(), riak_object:key()},
-    array:array()|none,
+    ets:tid()|none,
     non_neg_integer(),
     boolean() | list({atom(), any()}) | not_fetched) ->
-        not_changed | array:array().
+        not_changed.
 maybe_cache_evict(_BKey, Cache, _CacheSize, BProps)
         when Cache == none; BProps == false ->
     not_changed;
-maybe_cache_evict(BKey, VnodeCache, CacheSize, true) ->
+maybe_cache_evict(BKey, Cache, CacheSize, true) ->
     Hash = erlang:phash2(BKey, CacheSize),
-    case array:get(Hash, VnodeCache) of
-        {BKey, _CachedObj} ->
-            array:set(Hash, not_cached, VnodeCache);
+    case ets:lookup(Cache, Hash) of
+        [{Hash, {BKey, _CachedObj}}] ->
+            ets:insert(Cache, {Hash, not_cached});
         _ ->
             not_changed
     end;
@@ -4655,7 +4641,7 @@ maybe_cache_evict(BKey, Cache, CacheSize, BProps) ->
 %% object has been fetched and the clock and index_data extracted
 %% - not_determined - no help from either cache or head capability
 -spec maybefetch_clock_and_indexdata(
-    array:array()|none,
+    ets:tid()|none,
     non_neg_integer(),
     {riak_object:bucket(), riak_object:key()},
     module(),
