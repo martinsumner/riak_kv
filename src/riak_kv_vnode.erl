@@ -3274,12 +3274,12 @@ get_old_object_or_fake(true, Bucket, Key, Mod, ModState, _CacheClock) ->
         {error, not_found, _UpdModState} ->
             not_found;
         {ok, TheOldObj, _UpdModState} ->
-            {ok, TheOldObj}
+            TheOldObj
     end;
 get_old_object_or_fake(false, Bucket, Key, _Mod, _ModState, CacheClock) ->
     FakeObj0 = riak_object:new(Bucket, Key, <<>>),
     FakeObj = riak_object:set_vclock(FakeObj0, CacheClock),
-    {ok, FakeObj}.
+    FakeObj.
 
 %% @Doc in the case that this a co-ordinating put, prepare the object.
 %% NOTE: this is called _only_ when the local object is `notfound'
@@ -4558,7 +4558,7 @@ try_set_concurrency_limit(Lock, Limit, true) ->
     non_neg_integer(),
     {riak_object:bucket(), riak_object:key()},
     boolean() | list({atom(), any()})) ->
-        not_cached | {ok, riak_object:riak_object()}.
+        not_cached | riak_object:riak_object().
 maybe_check_object_cache(Cache, _CacheSize, _BKey, BProps)
         when Cache == none; BProps == false ->
     not_cached;
@@ -4566,7 +4566,7 @@ maybe_check_object_cache(Cache, CacheSize, BKey, true) when CacheSize > 0 ->
     Hash = erlang:phash2(BKey, CacheSize),
     case array:get(Hash, Cache) of
         {BKey, CachedRObj} ->
-            {ok, CachedRObj};
+            CachedRObj;
         _ ->
             not_cached
     end;
@@ -4674,9 +4674,7 @@ maybefetch_clock_and_indexdata(
     CacheResult =
         maybe_check_object_cache(VnodeCache, CacheSize, BKey, UseCache),
     case CacheResult of
-        {ok, OldObj} ->
-            {cached, OldObj};
-        _ ->
+        not_cached ->
             {ok, Capabilities} = Mod:capabilities(element(1, BKey), ModState),
             CanGetHead =
                 maybe_support_head_requests(Capabilities)
@@ -4699,7 +4697,9 @@ maybefetch_clock_and_indexdata(
                     end;
                 _ ->
                     not_determined
-            end         
+            end;
+        OldObj ->
+            {cached, OldObj}
     end.
 
 
