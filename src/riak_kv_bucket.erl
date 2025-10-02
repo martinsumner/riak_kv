@@ -261,6 +261,7 @@ validate([{BoolProp, MaybeBool}|T], ValidProps, Errors)
             orelse BoolProp =:= stat_tracked
             orelse BoolProp =:= aae_tree_exclude
             orelse BoolProp =:= async_put
+            orelse BoolProp =:= vnode_object_cache
          ->
     case coerce_bool(MaybeBool) of
         error ->
