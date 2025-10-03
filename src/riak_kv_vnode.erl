@@ -855,8 +855,7 @@ init([Index]) ->
     VnodeCacheSize = app_helper:get_env(riak_kv, vnode_object_cache_size, 0),
     VnodeCache =
         case VnodeCacheSize of
-            N when is_integer(N), N > 0, N band (N - 1) == 0 ->
-                %% Vnode cache size must be a factor of 2
+            N when is_integer(N), N > 0 ->
                 ets:new(
                     vnode_object_cache, 
                     [
@@ -1141,7 +1140,7 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
                         {false, undefined, [], UpModState}
                 end,
             IndexSpecs = riak_object:diff_index_data(OldIdxData, IdxData),
-            UpdVnodeCache =
+            _UpdVnodeCache =
                 maybe_cache_evict(
                     BKey,
                     State#state.vnode_object_cache,
@@ -1171,10 +1170,7 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
                     aae_delete(Bucket, Key, confirmed_no_old_object, State)
             end,
             riak_core_vnode:reply(Sender, Reply),
-            case UpdVnodeCache of
-                not_changed ->
-                    {noreply, State#state{modstate=ModState3}}
-            end;
+            {noreply, State#state{modstate=ModState3}};
         false ->
             {reply, {error, {indexes_not_supported, Mod}}, State}
     end;
@@ -2993,7 +2989,7 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
     %% Do the delete...
     {Bucket, Key} = BKey,
     %% Update the cache first - in case error did mutate state
-    UpdatedVnodeCache =
+    _UpdatedVnodeCache =
         maybe_cache_evict(
             BKey,
             State#state.vnode_object_cache,
@@ -3010,10 +3006,7 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
             {error, _Reason, NewModState} ->
                 NewModState
         end,
-    case UpdatedVnodeCache of
-        not_changed ->
-            State#state{modstate = UpdModState}
-    end.
+    State#state{modstate = UpdModState}.
 
 %% @doc
 %% Prepare PUT needs to prepare the correct transition from old object to new
@@ -3389,7 +3382,7 @@ actual_put(
             update_hook=UpdateHook
         }
 ) ->
-    {Reply, UpdModState, UpdVnodeCache} =
+    {Reply, UpdModState, _UpdVnodeCache} =
         case encode_and_put(
             Obj, Mod, Bucket, Key, IndexSpecs, ModState, MaxCheckFlag, Coord, Sync
         ) of
@@ -3429,10 +3422,7 @@ actual_put(
             {{error, Reason, NewModState}, _EncodedVal} ->
                 {{fail, Idx, Reason}, NewModState, not_changed}
         end,
-    case UpdVnodeCache of
-        not_changed ->
-            {Reply, State#state{modstate = UpdModState}}
-    end.
+    {Reply, State#state{modstate = UpdModState}}.
 
 actual_put_tracked(BKey, {_NewObj, _OldObj} = Objs, IndexSpecs, RB, ReqId, State) ->
     StartTS = os:timestamp(),
@@ -4548,7 +4538,7 @@ maybe_check_object_cache(Cache, _CacheSize, _BKey, BProps)
         when Cache == none; BProps == false ->
     not_cached;
 maybe_check_object_cache(Cache, CacheSize, BKey, true) when CacheSize > 0 ->
-    Hash = erlang:phash2(BKey, CacheSize),
+    Hash = erlang:phash2(element(2, BKey), CacheSize),
     case ets:lookup(Cache, Hash) of
         [{Hash, {BKey, CachedRObj}}] ->
             CachedRObj;
@@ -4574,7 +4564,7 @@ maybe_cache_object(_BKey, _RObj, Cache, _CacheSize, BProps)
         when Cache == none; BProps == false ->
     not_changed;
 maybe_cache_object(BKey, Obj, Cache, CacheSize, true) ->
-    Hash = erlang:phash2(BKey, CacheSize),
+    Hash = erlang:phash2(element(2, BKey), CacheSize),
     ets:insert(Cache, {Hash, {BKey, Obj}}),
     not_changed;
 maybe_cache_object(BKey, RObj, Cache, CacheSize, not_fetched) ->
@@ -4604,7 +4594,7 @@ maybe_cache_evict(_BKey, Cache, _CacheSize, BProps)
         when Cache == none; BProps == false ->
     not_changed;
 maybe_cache_evict(BKey, Cache, CacheSize, true) ->
-    Hash = erlang:phash2(BKey, CacheSize),
+    Hash = erlang:phash2(element(2, BKey), CacheSize),
     case ets:lookup(Cache, Hash) of
         [{Hash, {BKey, _CachedObj}}] ->
             ets:insert(Cache, {Hash, not_cached});
@@ -5112,31 +5102,39 @@ rollover_test_() ->
     }.
 
 roll_put_properties(BProps) ->
-    roll_put_properties(BProps, true, false, undefined).
+    roll_put_properties(BProps, true, false, undefined, false, false).
 
-roll_put_properties([], DVV, WriteOnce, AM) ->
-    {DVV, WriteOnce, AM};
-roll_put_properties([{dvv_enabled, DVV}|Props], _DVV, WriteOnce, AM) ->
-    roll_put_properties(Props, DVV, WriteOnce, AM);
-roll_put_properties([{write_once, WriteOnce}|Props], DVV, _WriteOnce, AM) ->
-    roll_put_properties(Props, DVV, WriteOnce, AM);
-roll_put_properties([{allow_mult, AM}|Props], DVV, WriteOnce, _AM) ->
-    roll_put_properties(Props, DVV, WriteOnce, AM);
-roll_put_properties([_Prop|Props], DVV, WriteOnce, AM) ->
-    roll_put_properties(Props, DVV, WriteOnce, AM).
+roll_put_properties([], DVV, WriteOnce, AM, AP, VC) ->
+    {DVV, WriteOnce, AM, AP, VC};
+roll_put_properties([{dvv_enabled, DVV}|Props], _DVV, WriteOnce, AM, AP, VC) ->
+    roll_put_properties(Props, DVV, WriteOnce, AM, AP, VC);
+roll_put_properties([{write_once, WriteOnce}|Props], DVV, _WriteOnce, AM, AP, VC) ->
+    roll_put_properties(Props, DVV, WriteOnce, AM, AP, VC);
+roll_put_properties([{allow_mult, AM}|Props], DVV, WriteOnce, _AM, AP, VC) ->
+    roll_put_properties(Props, DVV, WriteOnce, AM, AP, VC);
+roll_put_properties([{async_put, AP}|Props], DVV, WriteOnce, AM, _AP, VC) ->
+    roll_put_properties(Props, DVV, WriteOnce, AM, AP, VC);
+roll_put_properties([{vnode_object_cache, VC}|Props], DVV, WriteOnce, AM, AP, _VC) ->
+    roll_put_properties(Props, DVV, WriteOnce, AM, AP, VC);
+roll_put_properties([_Prop|Props], DVV, WriteOnce, AM, AP, VC) ->
+    roll_put_properties(Props, DVV, WriteOnce, AM, AP, VC).
 
 keyfind_fetcher(DProps) ->
     {
         keyfind(dvv_enabled, DProps, true),
         keyfind(write_once, DProps, false),
-        keyfind(allow_mult, DProps, undefined)
+        keyfind(allow_mult, DProps, undefined),
+        keyfind(async_put, DProps, false),
+        keyfind(vnode_object_cache, DProps, false)
     }.
 
 proplist_fetcher(DProps) ->
     {
         proplists:get_value(dvv_enabled, DProps, true),
         proplists:get_value(write_once, DProps, false),
-        proplists:get_value(allow_mult, DProps, undefined)
+        proplists:get_value(allow_mult, DProps, undefined),
+        proplists:get_value(async_put, DProps, false),
+        proplists:get_value(vnode_object_cache, DProps, false)
     }.
 
 map_fetcher(DProps) ->
@@ -5144,10 +5142,12 @@ map_fetcher(DProps) ->
     {
         maps:get(dvv_enabled, M, true),
         maps:get(write_once, M, false),
-        maps:get(allow_mult, M, undefined)
+        maps:get(allow_mult, M, undefined),
+        maps:get(async_put, M, false),
+        maps:get(vnode_object_cache, M, false)
     }.
 
-speed_test() ->
+property_speed_test() ->
     %% What is the fastest way of getting three bucket properties?
     %% On my machine - Speed compare 9239 10455 26193
     DefaultProps =
@@ -5160,6 +5160,8 @@ speed_test() ->
             {young_vclock,20},
             {big_vclock,50},
             {small_vclock,50},
+            {async_put, true},
+            {vnode_object_cache, false},
             {pr,0},
             {r,quorum},
             {w,quorum},
@@ -5217,9 +5219,78 @@ speed_test() ->
     ?assertMatch(R0, R3),
     io:format(
         user,
-        "Speed compare ~w ~w ~w ~w~n",
+        "Speed compare roll ~w pl ~w map ~w lkf ~w~n",
         [TC0, TC1, TC2, TC3]
     ).
+
+hash1({Bucket, Key}) ->
+    erlang:phash2({Bucket, Key}, 1024).
+
+hash2({_Bucket, Key}) ->
+    erlang:phash2(Key, 1024).
+
+hash3({_Bucket, Key}) ->
+    erlang:phash2(Key, 1000).
+
+hash4({_Bucket, Key}) ->
+    <<I:32/integer, _Rest/binary>> = crypto:hash(md5, Key),
+    I band 1023.
+
+hash5({_Bucket, Key}) ->
+    <<_R:16/integer, I:32/integer, _Rest/binary>> = crypto:hash(sha, Key),
+    I band 1023.
+
+hash_speed_test() ->
+    KeyList1000 =
+        lists:map(
+            fun(I) ->
+                {
+                    {<<"BucketType">>, <<"BucketName">>},
+                    list_to_binary(io_lib:format("K~8..0B", [I]))
+                }
+            end,
+            lists:seq(1, 1000)
+        ),
+    KeyList2000 =
+        lists:map(
+            fun(I) ->
+                {
+                    {<<"BucketType">>, <<"BucketName">>},
+                    list_to_binary(io_lib:format("K~8..0B", [I]))
+                }
+            end,
+            lists:seq(1000, 3000)
+        ),
+    io:format(
+        user,
+        "Keys 1K BK+PH2 ~w K+PH2 ~w K+PH2(1000) ~w K+MD5 ~w K+SHA1 ~w~n",
+        [
+            hash_speed_tester(fun hash1/1, KeyList1000),
+            hash_speed_tester(fun hash2/1, KeyList1000),
+            hash_speed_tester(fun hash3/1, KeyList1000),
+            hash_speed_tester(fun hash4/1, KeyList1000),
+            hash_speed_tester(fun hash5/1, KeyList1000)
+        ]
+    ),
+    io:format(
+        user,
+        "Keys 2K BK+PH2 ~w K+PH2 ~w K+PH2(1000) ~w K+MD5 ~w K+SHA1 ~w~n",
+        [
+            hash_speed_tester(fun hash1/1, KeyList2000),
+            hash_speed_tester(fun hash2/1, KeyList2000),
+            hash_speed_tester(fun hash3/1, KeyList2000),
+            hash_speed_tester(fun hash4/1, KeyList2000),
+            hash_speed_tester(fun hash5/1, KeyList2000)
+        ]
+    ).
+
+hash_speed_tester(HashFun, KeyList) ->
+    {TC, HashList} = timer:tc(lists, map, [HashFun, KeyList]),
+    {TC, length(lists:usort(HashList))}.
+    
+
+
+
 
 
 -endif.

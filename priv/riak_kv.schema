@@ -706,20 +706,8 @@
 %% counter performance
 {mapping, "vnode_object_cache_size", "riak_kv.vnode_object_cache_size", [
   {datatype, integer},
-  {default, 0},
-  {validators, ["factor_two"]}
+  {default, 0}
 ]}.
-
-{validator, "factor_two", "must be 0 or a factor of 2",
- fun(Value)->
-    (
-      is_integer(Value) andalso
-      (
-        Value == 0 orelse
-        Value band (Value - 1) == 0
-      )
-    )
- end}.
 
 %%%% Memory backend section
 %% @doc The maximum amount of memory consumed per vnode by the memory

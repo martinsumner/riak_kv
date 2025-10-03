@@ -345,7 +345,12 @@ vnode_object_cache_size_validator_test() ->
             context(),
             predefined_schema()
         ),
-    ?assertMatch({error, validation, {errorlist, _}}, Config500).
+        % cache size no longer required to be a factor of 2
+    cuttlefish_unit:assert_config(
+        Config500,
+        "riak_kv.vnode_object_cache_size",
+        500
+    ).
 
 correct_error_handling_by_multibackend_test() ->
     Conf = [
