@@ -331,6 +331,7 @@ prepare(
             bucket_props_map=BucketProps
         }
     ) ->
+    riak_kv_stat:update({fsm_spawned, puts}),
     StatTracked = get_option(stat_tracked, BucketProps, false),
     {SQ, AI, MC, CD, NV, ConditionCheck} =
         get_options_for_prepare(Options),
@@ -759,6 +760,7 @@ handle_info(_Info, _StateName, StateData) ->
 
 %% @private
 terminate(Reason, _StateName, _State) ->
+    riak_kv_stat:update({fsm_exit, puts}),
     Reason.
 
 %% @private
