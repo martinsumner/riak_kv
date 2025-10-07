@@ -131,7 +131,8 @@
         metadata_store/3,
         metadata_find/2,
         metadata_fromlist/1,
-        metadata_tolist/1
+        metadata_tolist/1,
+        metadata_iskey/2
     ]).
 
 -ifdef(TEST).
