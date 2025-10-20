@@ -1,3 +1,5 @@
+# Merge Strategy - Unifying Under One Behaviour
+
 ## Background
 
 As part of the Roadmap for Riak 4.0, there is a preference to simplify the scope of Riak, to reduce the long-term overheads of maintaining Riak and focusing the preferred functional scope on those features which are mutually inclusive and are proven to meet the non-functional promises advertised by Riak.  This has created an incentive to consider removing the CRDT data-type feature in Riak 4.0, as:
@@ -160,7 +162,7 @@ The behaviour is expected to take this form:
 
 ```
 
-### Pseudo code examples - allow_mult = true
+### Pseudo code example - allow_mult = true
 
 A merge strategy module that is equivalent to allow_mult=true, may be similar to:
 
@@ -199,6 +201,8 @@ handle_get_response_body(RObj, _MergeOption) ->
 
 ```
 
+### Pseudo code example - allow_mult = false
+
 A merge strategy module that is equivalent to allow_mult=false, may be similar to:
 
 ```erlang
@@ -235,6 +239,8 @@ handle_get_response_body(RObj, _MergeOption) ->
     RObj.
 
 ```
+
+### Pseudo code example - archive unresolved siblings
 
 A merge strategy oo always return to the client a single object, but archive any siblings so no data loss occurs.
 
@@ -326,6 +332,8 @@ handle_get_response_body(RObj, false) ->
     end.
 
 ```
+
+### Pseudo code example - simple counter
 
 A merge strategy to implement a pn_counter with action-at-a-distance:
 
