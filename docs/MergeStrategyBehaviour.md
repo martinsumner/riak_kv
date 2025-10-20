@@ -2,19 +2,23 @@
 
 ## Background
 
-As part of the Roadmap for Riak 4.0, there is a preference to simplify the scope of Riak, to reduce the long-term overheads of maintaining Riak and focusing the preferred functional scope on those features which are mutually inclusive and are proven to meet the non-functional promises advertised by Riak.  This has created an incentive to consider removing the CRDT data-type feature in Riak 4.0, as:
+As part of the Roadmap for Riak 4.0, there is a preference to simplify the scope of Riak, to reduce the long-term overheads of maintaining Riak and focusing the functional scope on those priority features which are mutually inclusive and are proven to meet the non-functional promises advertised by Riak.  This has created an incentive to consider removing the CRDT data-type feature in Riak 4.0, as:
 
 - The feature has known and probably also unknown limitations of scale that undermine Riak commitments to non-volatile latency of responses even as objects grow.
 - The feature is not compatible with the Riak query API.
-- The OpenRiak community has limited production-level experience of the problems of managing Riak data-types.
+- The OpenRiak community has limited production-level experience of the problems of managing Riak data-types - there maybe unknown issues lurking, as well as known problems.
 
-However, the presence of conflict-free data-types has been identified as a positive reason for choosing Riak by multiple end-users, it is a differentiator.  There is also within the community ideas of how to expand and improve on the existing data types, and real world users with systems that depend on these data types.
+There are many scenarios where a data-type would appear to be the right way forward, and documentation will imply that data-types must be used: but once queryability and scalability are considered, often a bespoke solution using a non-standard data-type is more suitable.
+
+Despite some of the issues with the feature, the presence of conflict-free data-types has been identified as a positive reason for choosing Riak by multiple end-users, it is a differentiator.  There is also within the community ideas of how to expand and improve on the existing data types, and real world users with systems that depend on these data types.
+
+For further background - see https://github.com/orgs/OpenRiak/discussions/31.
 
 ## Proposal
 
 The proposal is to add to Riak a new behaviour definition called `merge_strategy`, and require for buckets that have the property `{last_write_wins, false}` to also have a `merge_strategy` bucket property, where the value of that property is a Module name, that implements the `merge_strategy` behaviour.
 
-The intention is that Riak will be compiled and packaged in the future with a limited number of `merge_strategy` behaviour modules that can be used as values for the `merge_strategy` bucket property.  However, end-users of Riak, and OpenRiak community organisations that work with end-users, will be able to patch in additional modules that comply with the behaviour and reference those modules as the `merge_strategy` for their buckets.
+In a future release, Riak will be compiled and packaged with a limited number of `merge_strategy` behaviour modules that can be used as values for the `merge_strategy` bucket property.  However, end-users of Riak, and OpenRiak community organisations that work with end-users, will be able to patch in additional behaviour-compliant modules, and reference those modules as the `merge_strategy` for their buckets.  The scope of the merge strategies will be extendable by expert users.
 
 The aim is that the behaviour should be sufficiently flexible to:
 
@@ -27,21 +31,21 @@ The aim is that the behaviour should be sufficiently flexible to:
 - Allow for sharding strategies to be implemented, where objects are split across multiple objects internally, to allow for objects which exceed existing maximum object sizes, or to allow for data-types which will benefit from efficiency through sharding.
 - Allow for more rapid iteration of data-type development in the community in the future. 
 
-The the expected limitations of the behaviour will be:
+The expected limitations of the behaviour will be:
 
-- Will not be sufficiently flexible provide a backend-integrated answer to the problem of scale (e.g. big-sets).
+- Will not be sufficiently flexible provide a backend-integrated and vnode-specific answer to the problem of scale (e.g. big-sets).
 - Will not by default provide efficient handling of misconfiguration (e.g. merging data-types with standard riak objects).
 - Will pass responsibility for migration to the module-developer and limit the tools available to assist in that migration (e.g. cuttlefish-generated configuration, capability negotiation).
-- Will constrain the efficiency with which the PB AIP can be used for data-type interaction.
+- Will constrain the efficiency with which the PB interface can be used for data-type interaction.
 
 ### Prototype Scope
 
-This branch is intended to be used to develop a prototype of this behaviour.  The scope of the prototype will be limited to providing a demonstration of:
+This branch is intended to be used to develop a prototype of the proposed behaviour.  The scope of the prototype will be limited to providing a demonstration of:
 
 - The implementation of a replacement to `allow_mult = true/false`.
 - The implementation of an `archive_siblings` strategy (a strategy which will internally be `allow_mult = true`, but externally `allow_mult = false` but where any siblings discarded from GET responses are auto-archived in a separate bucket).
 - The implementation of a pn_counter what is backwards compatible with an existing Riak 3.4 version 2 pn_counter, that provides a queryable index of all counter values.
-- the implementation of an auto-sharding GSET that supports predictable latency GSET membership additions (as the GSET scales), and efficient membership checks via the current Riak GET API.
+- The implementation of an auto-sharding GSET that supports predictable latency GSET membership additions (as the GSET scales), and efficient membership checks via the current Riak GET API.
 
 If the prototype is successful, there will be a proposal to use this idea as the basis for data-type and object development in Riak 4.0, and as a basis for retiring legacy data-type functionality from both Riak and Riak Clients.
 
@@ -242,7 +246,7 @@ handle_get_response_body(RObj, _MergeOption) ->
 
 ### Pseudo code example - archive unresolved siblings
 
-A merge strategy oo always return to the client a single object, but archive any siblings so no data loss occurs.
+A merge strategy to always return to the client a single object, but archive any siblings so no data loss occurs:
 
 ```erlang
 -module(allow_mult_archive).
@@ -386,11 +390,12 @@ reconcile_strategy() ->
 merge_content({MD_LHS, Value_LHS}, {_MD_RHS, Value, RHS}) ->
     LHSValue = binary_to_term(riak_object:get_value(Value_LHS)),
     RHSValue = binary_to_term(riak_object:get_value(Value_RHS)),
-    UpdatedValue = merge_content(LHSValue, RHSValue),
-    {MD_LHS, term_to_binary(UpdatedValue)};
-merge_content(LHS, #{}) when is_map(LHS) ->
+    UpdatedValue = merge_value(LHSValue, RHSValue),
+    {MD_LHS, term_to_binary(UpdatedValue)}.
+
+merge_value(LHS, #{}) when is_map(LHS) ->
     LHS;
-merge_content(LHS, RHS) when is_map(LHS), is_map(RHS) ->
+merge_value(LHS, RHS) when is_map(LHS), is_map(RHS) ->
     maps:merge_with(
         fun(_Key, {LI, LD}, {RI, RD}) ->
             {max(LI, RI), max(LD, RD)}
@@ -422,19 +427,59 @@ handle_get_response_body(RObj, _MergeOption) ->
     ).
 ```
 
+### Pseudo code example - last write wins = true
+
+A merge strategy to implement last_write_wins (not a reocmmendation for implementation - as it is without the efficiency of avoiding GETs):
+
+```erlang
+-module(allow_mult_false).
+-behaviour(riak_kv_merge_strategy).
+
+-export(
+    [
+        handle_put_request_body/2,
+        process_update/3,
+        assign_dot/0,
+        reconcile_strategy/0,
+        merge_content/2,
+        handle_get_response_body/2
+    ]
+).
+
+handle_put_request_body(RObj, Value) ->
+    {riak_object:update_value(RObj, Value), undefined}.
+
+process_update(_Object, _Operation, _VnodeID) ->
+    {error, not_supported}.
+
+assign_dot() ->
+    false.
+
+reconcile_strategy() ->
+    merget.
+
+merge_content(_ContentLHS, ContentRHS) ->
+    ContentRHS.
+
+handle_get_response_body(RObj, _MergeOption) ->
+    RObj.
+
+```
+
 ## Draft Riak 4.0 Proposal and Migration
 
 A potential draft plan for implementation is:
 
-- Existing data-types enter dark-mode in Riak 3.4 as planned.
+- Existing data-types enter dark-mode in Riak 3.4 as planned, but are still supported for backwards compatability.
 - An initial set of merge_strategies are implemented and tested for Riak 4.0 by the Riak development team:
   - allow_mult_true;
   - allow_mult_false;
   - pn_counter (backwards compatible).
 - Further strategies may be added via PR into the release by third parties, subject to review.
-- A new repository be set-up to allow for new community merge strategies to be adevertised.
+- the setup of  new repository to allow for new community merge strategies to be advertised to Riak users.
 - The `merge_strategy` bucket property will be enabled in Riak 3.4, but will be inert in that release
-  - The strategy will become active as nodes are migrated to Riak 4.0, and previous proeprties will become inactive e.g. `allow_mult`, `datatype`.
-  - The use of community merge strategies will be referenced in the Riak docs, but only strategies merged into Riak KV will be documented.
-- All legacy CRDT APIs will be deprecated server-side in Riak 4.0, and removed in 4.2
-- All legacy CRDT code will be removed from supported Riak 4.0 clients.
+  - The strategy will become active as nodes are migrated to Riak 4.0, and previous properties will become inactive e.g. `allow_mult`, `datatype`.
+  - It will be a requirement for migration to prepare for the switch-over by adding the necessary configuration for Riak 4.0 prior to migration (there will be no auto-translation of properties).
+- The use of community merge strategies will be referenced in the Riak docs, but only strategies merged into Riak KV will be documented.
+- All legacy CRDT APIs will be deprecated server-side in Riak 4.0, and removed in the 4.2 release.
+- All legacy CRDT code will be removed from supported Riak 4.0 clients as part of the Riak 4.0 release.
