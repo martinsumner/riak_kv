@@ -456,7 +456,7 @@ assign_dot() ->
     false.
 
 reconcile_strategy() ->
-    merget.
+    merge.
 
 merge_content(_ContentLHS, ContentRHS) ->
     ContentRHS.
