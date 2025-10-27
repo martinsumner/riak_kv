@@ -54,90 +54,53 @@ If the prototype is successful, there will be a proposal to use this idea as the
 The behaviour is expected to take this form:
 
 ```erlang
+%% @doc Riak KV Merge Strategy Behavior.
+%%
+%% === Result patterns ===
+%%
+%%  {ok, Result :: term()}
+%%  atom()
+%%  {error, Reason :: term()}
+%%
+%% === Extra Information ===
+%%
+%% The {@link context()} type is used to convey contextual information across
+%% callbacks in a form understood by the callback module implementation.
+%% The calling process passes this information uninterpretted.
+%%
+%% The {@link context_obj()} tagged tupple provides an unambiguous pattern
+%% for matching a {@link intermediary()} (likely a {@link riak_obj()}) bundled
+%% with an opaque {@link context()}.
+%%
+%% The callback module's `process_update/2', `assign_dot/1', and
+%% `reconcile_strategy/1' functions MUST all handle ANY {@link subject_obj()}
+%% returned from `handle_put_request_body/2' appropriately.
+%%
 -module(riak_kv_merge_strategy).
 
-%% @doc
-%% At the API when receiving a PUT request a riak_object will be generated
-%% from the contents, and then handle_put_request_body/2 will be called on
-%% the merge strategy, passing the generated object and the body of the
-%% request.
-%%
-%% For standard riak_objects, then this callback should set the value in the
-%% riak_object to be the body of the request and return
-%% {UpdatedObj, undefined}.
-%%
-%% For standard data-type behaviour, a new object should be generated
-%% (adding to the object passed to this function a new empty value of the
-%% correct type), and the request body should be de-serialised and parsed to
-%% produce a CRDT update operation.
-%%
-%% When using sharding, `riak_client:get/3` call may be used here to return and
-%% update a metadata object, with the update then proceeding with the update
-%% object key having been adjusted to represent the required shard.
-%%
-%% If the module always returns undefined as the update operation, then the
-%% `process_update/3` callback will never be called.  If using client-side
-%% actor IDs, the original change should be merged into the returned object and
-%% undefined returned as the crdt_op - as there is no need to apply the change
-%% at the vnode (and make use of the vnode actor ID).
--callback handle_put_request_body(
-    riak_object:riak_object(), binary()) ->
-        {riak_object:riak_object(), #crdt_op{} | undefined}.
+-export_type([
+    context/0,
+    context_obj/0,
+    merge_opt/0,
+    strategy/0
+]).
 
-%% @doc
-%% If there is a defined #crdt_op, for the PUT, at the vnode coordinating the
-%% PUT the `process_update/3` callback will be called.  This function should
-%% update the existing (stored) object, using the update operation and the
-%% provided actor ID.  The existing object will have first been merged with
-%% the object output from the `handle_put_request_body/2` callback, prior to
-%% the `process_update/3` callback being applied.
--callback process_update(
-    riak_object:riak_object(), #crdt_op{}, riak_kv_vnode:vnode_id()) ->
-        riak_object:riak_object() | {error, not_supported}.
+-type context() :: term().      % Effectively opaque.
+    % for backwards compatability in initial release, may be constrained to be
+    % a #crdt_op{} record
+-type merge_opt() :: term().    % Allow for structured data.
+-type strategy() :: most_recent | merge.
 
-%% @doc
-%% Whether a `dot` should be assigned to each content item in the object.  The
-%% `dot` will then be used to pre-filter siblings, and reduce the potential 
-%% for sibling explosion.
-%% 
-%% If a `dot` is not assigned, and the reconcile_strategy/1 callback returns
-%% `merge`, then there is no pre-filtering of siblings and each siblings will
-%% be passed through the merge_content/2 callback before being stored as a
-%% single content item.
--callback assign_dot() -> boolean().
+-type simple_obj() :: riak_obj().
+-type context_obj() :: {ctx, intermediary(), context()}.
+-type intermediary() :: term().
+    % Likely riak_obj(), but not explicit
+-type subject_obj() :: simple_obj() | context_obj().
 
-%% @doc
-%% Objects are reconciled prior to storage, and prior to generating a GET
-%% response, and two strategies are supported:
-%% `most_recent` - select a single content item by choosing the item with the
-%% highest last_modified_date;
-%% `merge` - merge the contents into either siblings (when `assign_dot/0` 
-%% returns true), or using the `merge_content/2` callback (when `assign_dot/0
-%% returns false).
--callback reconcile_strategy() -> most_recent|merge.
-
-%% @doc
-%% Merge two content items as part of object reconciliation.  This merge will
-%% occur as part of a fold within the riak_object:fold_contents/3 function - 
-%% the merge is incremental across siblings, the output may still require
-%% merging with other sibling contents.
-%%
-%% `merge_contents/2` will only be called should the `assign_dot/0` callback
-%% return false, and the `reconcile_strategy/0` callback be set to `merge`.
-%%
-%% The merge should output both a metadata and value part of the content.
-%% Should there be a need for the object to be indexed for querying, then
-%% `riak_object:index_specs/0` should be added to the object output e.g. if
-%% the object is a counter, the counter value may be requested from the merged
-%% value, and then added to the metadata of the content as a secondary index to
-%% be queryable via the Query API.
-%%
-%% When supporting data types, every PUT will require a merge with the RHS
-%% being an empty object (this will happen at the coordinating vnode) - so
-%% optimising for this scenario is important.
--callback merge_content(
-    riak_object:r_content(), riak_object:r_content()) ->
-        riak_object:r_content() | {error, term()}.
+-type obj_content() :: riak_object:r_content().
+-type obj_value() :: riak_object:value().
+-type riak_obj() :: riak_object:riak_object().
+-type vnode_id() :: riak_kv_vnode:vnode_id().
 
 %% @doc
 %% Prior to the GET FSM returning the object to the client, the
@@ -161,9 +124,89 @@ The behaviour is expected to take this form:
 %% - recognise the object is a metadata object, and prompt a secondary GET to
 %% return the required shard, or spawn a series of GETs to return all shards.
 -callback handle_get_response_body(
-    riak_object:r_object(), binary()) ->
-        riak_object:r_object().
+    Object :: riak_obj(), MergeOption :: merge_opt() ) ->
+        {ok, Result :: riak_obj()} | {error, Reason :: term()}.
 
+%% @doc
+%% At the API when receiving a PUT request a riak_object will be generated
+%% from the contents, and then handle_put_request_body/2 will be called on
+%% the merge strategy, passing the generated object and the body of the
+%% request.
+%%
+%% For standard riak_objects, then this callback should set the value in the
+%% riak_object to be the body of the request and return this as the
+%% subject_obj()
+%%
+%% For standard data-type behaviour, a new object should be generated
+%% (adding to the object passed to this function a new empty value of the
+%% correct type), and the request body should be de-serialised and parsed to
+%% produce a CRDT update operation using context_obj().
+%%
+%% When using sharding, `riak_client:get/3` call may be used here to return and
+%% update a metadata object, with the update then proceeding with the update
+%% object key having been adjusted to represent the required shard.
+%%
+%% If the module always returns undefined as the update operation, then the
+%% `process_update/3` callback will never be called.  If using client-side
+%% actor IDs, a simple_obj() should be returned not a context_obj().
+-callback handle_put_request_body(
+    Object :: riak_obj(), Value :: obj_value() ) ->
+        {ok, Result :: subject_obj()} | {error, Reason :: term()}.
+
+%% @doc
+%% Merge two content items as part of object reconciliation.  This merge will
+%% occur as part of a fold within the riak_object:fold_contents/3 function - 
+%% the merge is incremental across siblings, the output may still require
+%% merging with other sibling contents.
+%%
+%% `merge_contents/2` will only be called should the `assign_dot/1` callback
+%% return false, and the `reconcile_strategy/1` callback be set to `merge`.
+%%
+%% The merge should output both a metadata and value part of the content.
+%% Should there be a need for the object to be indexed for querying, then
+%% `riak_object:index_specs/0` should be added to the object output e.g. if
+%% the object is a counter, the counter value may be requested from the merged
+%% value, and then added to the metadata of the content as a secondary index to
+%% be queryable via the Query API.
+%%
+%% When supporting data types, every PUT will require a merge with the RHS
+%% being an empty object (this will happen at the coordinating vnode) - so
+%% optimising for this scenario is important.
+-callback merge_content(
+    ObjContL :: obj_content(), ObjContR :: obj_content() ) ->
+        {ok, Result :: obj_content()} | {error, Reason :: term()}.
+
+%% @doc
+%% If there is a defined #crdt_op, for the PUT, at the vnode coordinating the
+%% PUT the `process_update/3` callback will be called.  This function should
+%% update the existing (stored) object, using the update operation and the
+%% provided actor ID.  The existing object will have first been merged with
+%% the object output from the `handle_put_request_body/2` callback, prior to
+%% the `process_update/3` callback being applied.
+-callback process_update(
+    Object :: subject_obj(), VNodeID :: vnode_id() ) ->
+        {ok, Result :: riak_obj()} | {error, Reason :: term()}.
+
+%% @doc
+%% Whether a `dot` should be assigned to each content item in the object.  The
+%% `dot` will then be used to pre-filter siblings, and reduce the potential 
+%% for sibling explosion.
+%% 
+%% If a `dot` is not assigned, and the reconcile_strategy/1 callback returns
+%% `merge`, then there is no pre-filtering of siblings and each siblings will
+%% be passed through the merge_content/2 callback before being stored as a
+%% single content item.
+-callback assign_dot(Object :: subject_obj() ) -> boolean().
+
+%% @doc
+%% Objects are reconciled prior to storage, and prior to generating a GET
+%% response, and two strategies are supported:
+%% `most_recent` - select a single content item by choosing the item with the
+%% highest last_modified_date;
+%% `merge` - merge the contents into either siblings (when `assign_dot/0` 
+%% returns true), or using the `merge_content/2` callback (when `assign_dot/0
+%% returns false).
+-callback reconcile_strategy(Object :: subject_obj() ) -> strategy().
 ```
 
 ### Pseudo code example - allow_mult = true
@@ -186,15 +229,15 @@ A merge strategy module that is equivalent to allow_mult=true, may be similar to
 ).
 
 handle_put_request_body(RObj, Value) ->
-    {riak_object:update_value(RObj, Value), undefined}.
+    {ok, riak_object:update_value(RObj, Value)}.
 
 process_update(_Object, _Operation, _VnodeID) ->
     {error, not_supported}.
 
-assign_dot() ->
+assign_dot(_Obj) ->
     true.
 
-reconcile_strategy() ->
+reconcile_strategy(_Obj) ->
     merge.
 
 merge_content(_RObjLHS, _RObjRHS) ->
@@ -225,15 +268,15 @@ A merge strategy module that is equivalent to allow_mult=false, may be similar t
 ).
 
 handle_put_request_body(RObj, Value) ->
-    {riak_object:update_value(RObj, Value), undefined}.
+    {ok, riak_object:update_value(RObj, Value)}.
 
 process_update(_Object, _Operation, _VnodeID) ->
     {error, not_supported}.
 
-assign_dot() ->
+assign_dot(_Obj) ->
     false.
 
-reconcile_strategy() ->
+reconcile_strategy(_Obj) ->
     most_recent.
 
 merge_content(_ContentLHS, _ContentRHS) ->
@@ -264,15 +307,15 @@ A merge strategy to always return to the client a single object, but archive any
 ).
 
 handle_put_request_body(RObj, Value) ->
-    {riak_object:update_value(RObj, Value), undefined}.
+    {ok, riak_object:update_value(RObj, Value)}.
 
 process_update(_Object, _Operation, _VnodeID) ->
     {error, not_supported}.
 
-assign_dot() ->
+assign_dot(_Obj) ->
     true.
 
-reconcile_strategy() ->
+reconcile_strategy(_Obj) ->
     merge.
 
 merge_content(_ContentLHS, _ContentRHS) ->
@@ -365,6 +408,7 @@ handle_put_request_body(RObj, Value) ->
                 {decrement, N}
         end,
     {
+        context,
         riak_object:update_value(RObj, term_to_binary(#{})),
         #crdt_op{op = Op, ctx = undefined}
     }.
@@ -381,10 +425,10 @@ process_update(Object, Operation, VnodeID) ->
         end,
     riak_object:update_value(Object, term_to_binary(Value)).
 
-assign_dot() ->
+assign_dot(_Obj) ->
     false.
 
-reconcile_strategy() ->
+reconcile_strategy(_Obj) ->
     merge.
 
 merge_content({MD_LHS, Value_LHS}, {_MD_RHS, Value, RHS}) ->
@@ -447,15 +491,15 @@ A merge strategy to implement last_write_wins (not a reocmmendation for implemen
 ).
 
 handle_put_request_body(RObj, Value) ->
-    {riak_object:update_value(RObj, Value), undefined}.
+    {ok, riak_object:update_value(RObj, Value)}.
 
 process_update(_Object, _Operation, _VnodeID) ->
     {error, not_supported}.
 
-assign_dot() ->
+assign_dot(_Obj) ->
     false.
 
-reconcile_strategy() ->
+reconcile_strategy(_Obj) ->
     merge.
 
 merge_content(_ContentLHS, ContentRHS) ->
