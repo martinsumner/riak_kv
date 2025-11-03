@@ -422,7 +422,16 @@ concurrent_fetches([{T1, E} | Trace], T0, N, Status, Acc) ->
             _                        -> Status
         end,
     DT = timer:now_diff(T1, T0),
-    concurrent_fetches(Trace, T1, N1, Status1, [{DT, N, Status} || DT > 0] ++ Acc).
+    case Status1 of
+        Status ->
+            concurrent_fetches(
+                Trace, T1, N1, Status1, [{DT, N, Status} || DT > 0] ++ Acc
+                );
+        _StausChange ->
+            concurrent_fetches(
+                Trace, T1, N1, Status1, [{DT, N, Status} || DT >= 0] ++ Acc
+                )
+    end.
 
 %% -- API-spec ---------------------------------------------------------------
 api_spec() ->
