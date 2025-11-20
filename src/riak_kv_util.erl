@@ -158,7 +158,7 @@ make_request(Request, Index) ->
                                         Index).
 
 set_metric_domain() ->
-    #{domain => [{background, metric}]}.
+    #{domain => [background, metric]}.
 
 get_bucket_option(Type, BucketProps) ->
     case lists:keyfind(Type, 1, BucketProps) of
