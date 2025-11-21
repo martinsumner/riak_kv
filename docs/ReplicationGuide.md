@@ -15,9 +15,9 @@ Replication is considered to have three stages:
 - **Real-time replication**; the forwarding of changes between connected clusters as they occur.
 - **Reconciliation**; determining if two clusters have the same data at the same version, and automatically resolving any deltas that exist.
 
-Real-time replication is asynchronous in Riak, the availability and performance of one cluster should have no impact on the clusters replicating to it.  With asynchronous replication, under-pinning the system with reconciliation is vital in supporting low intervention operations - where replication failures do not need to prompt operator activity.
+Real-time replication is asynchronous in Riak, the availability and performance of one cluster should have no impact on the clusters replicating to it.  With asynchronous replication, under-pinning the system with reconciliation is important to reduce the need for operator intervention.  Simple replication failures should not need to prompt operator activity, as the failure will eventually be automatically resolved.
 
-> The speed and efficiency of inter-cluster reconciliation is a key feature of Riak.  It is normal in production systems to verify clusters are reconciled every few minutes, with the process taking less than 10s even when clusters have more than 10 billion objects.
+> The speed and efficiency of inter-cluster reconciliation is a key feature of Riak.  It is normal in production systems to verify clusters are reconciled every few minutes, with the process taking less than 10s, even when clusters contain more than 10 billion objects.
 
 The guide is split into the following sections:
 
