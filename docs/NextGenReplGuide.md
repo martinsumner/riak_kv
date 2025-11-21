@@ -1,19 +1,52 @@
-# Riak KV - NextGen Replication
+# Riak KV - Replication and Reconciliation
 
-The Riak NextGen replication is a replication solution, with these benefits:
+There are a number of replication versions in Riak:
 
-- allows for replication between clusters with different ring sizes and `n_val`s;
-- provides very efficient reconciliation to confirm clusters are synchronised;
-- efficient and fast resolution of small deltas between clusters;
-- extensive configuration control over the behaviour of replication;
-- a comprehensive set of operator tools to troubleshoot and resolve issues via `remote_console` and the CLI;
-- uses an API which is reusable for replication to and reconciliation with non-Riak databases.
+- Three different versions of the, now legacy, `riak_repl` replication which was the recommended replication approach prior to Riak 3.0.10;
+- The "NextGen" replication solution which is the recommended approach in Riak 3.4.
+
+This guide covers the "NextGen" replication solution, and further information on alternatives are linked from the [legacy replication section](#legacy-replication---riak_repl).
+
+Replication is considered in three parts:
+
+- **Real-time replication**; the forwarding of changes between connected clusters as they occur.
+- **Reconciliation**; determining if two clusters have the same data at the same version, and automatically resolving any deltas that exist.
+- **Seeding**; populating data in one cluster from another cluster.
+  - The approach to seeding using `repl_keys_range` is explained as part of [the AAE Fold API guide](/docs/OtherAPI.md#aae-fold-api).
+
+The guide is split into the following sections:
+
+- [An overview of the concepts](#overview).
+- [Configuration of real-time replication](#configuration-of-real-time-replication).
+- [Configuration of all-cluster reconciliation](#configuration-of-all-cluster-reconciliation).
+- Configuration of per-bucket reconciliation.
+- Operations and Troubleshooting of replication.
+- Other replication approaches.
+
+## Overview
+
+The Riak replication solution has the following benefits:
+
+- Allows for replication between clusters with different ring sizes, `n_val`s and node counts.
+- Uses a pull model for real-time replication with low-cost queueing;
+  - Support for low-impact suspension and resumption of replication,
+  - Prevents recipient clusters from being overwhelmed by replicated PUT volumes.
+- Provides very efficient reconciliation to confirm whole clusters are synchronised;
+  - Confirmation that across multiple clusters all objects are at the same version.
+- Efficient and fast resolution of small deltas between clusters;
+  - With a specific focus on accelerating the recovery of recently occurring deltas (e.g. following a failure or real-time replication).
+- Uses an API which is reusable for replication to and reconciliation with non-Riak databases.
 
 The replication solution works with these caveats:
 
-- slow to resolve very large deltas between clusters, operator intervention to use alternative tools may be required;
-- no support for hierarchical replication (i.e. such as the spanning-tree protected replication available in the legacy `riak_repl` application);
-- relatively little production testing when using parallel mode AAE (i.e. when not exclusively using the leveled backend).
+- Slow to resolve very large deltas between clusters;
+  - In some situations partial re-seeding should be prompted where deltas are large.
+- No support for hierarchical replication with loop prevention;
+  - Every peer relationship between clusters must be formed directly.
+- Requires limited additional infrastructure when using the leveled backend (as a single backend);
+  - For other backends a parallel keystore is required (which is shared with internal anti-entropy).
+
+Within the replication system ,for any replication event, there is a **source** and a **sink**.  The source is the cluster which has an update of interest to another cluster, and the sink is a system that attempts to fetch a replication event from another cluster.
 
 Before starting, it is helpful to understand the underlying concepts:
 
@@ -21,126 +54,146 @@ Before starting, it is helpful to understand the underlying concepts:
 - [Replication references](#concepts---replication-references);
 - [Reconciliation with anti-entropy](#concepts---reconciliation-with-active-anti-entropy).
 
-This document contains guidance on:
+### Concepts - Queues and Workers
 
-- [Configuring and starting replication and reconciliation](#configuring-and-starting-nextgen-replication);
-- [Monitoring and troubleshooting replication and reconciliation](#monitoring-and-run-time-changes)
+The first building block for replication are replication queues.  The replication queues use the [disk-backed queue framework](/docs/RiakTheoryGuide.md#disk-backed-queues) common across multiple Riak services.
 
-Note that NextGen replication is a replacement for `riak_repl`, a legacy replication application packaged with Riak.  For information on configuring `riak_repl` as an alternative to nextgen replication see legacy Riak documentation.
-
-It is possible to run `riak_repl` concurrently with nextgen repl, in order to ease the transition between the two services.
-
-## Concepts - Queues and Workers
-
-The first building block for NextGen replication are replication queues, which exist on the cluster that is a source of replication events.
+Replication references, which are primarily newly coordinated PUTs, are sent to the replication source queue process.  The real-time replication source then assesses which replication queues require that reference:
 
 - Each node must be configured with a separate queue for each cluster or external service which is required to receive replication events.
-- Each replication event will be placed on all queues relevant to that event, but only on one node within the cluster.
+  - Each replication event will be duplicated to all queues relevant to that event, but only on one node within the cluster.
 - Each queue is prioritised so that real-time events are consumed prior to any events related to batch or reconciliation activity.
 - Queues that grow beyond a configurable size are persisted to disk to manage the memory overhead of replication.
 - The queues are all temporary (even when persisting to disk); replication references will be lost on node failure or on node restart.
-- It is expected that real-time replication is always supported by inter-cluster reconciliation (i.e. such as that provided by NextGenRepl full-sync) to cover scenarios where references are lost.
+  - Failures in real-time replication need to be recovered through reconciliation.
 
-A Sink cluster, one receiving replication events, must have sink workers configured to read from a remote queue on Source clusters.
+A Sink cluster, one receiving replication events, must have sink workers configured to read from a remote queue on Source clusters:
 
 - Sink workers must be configured to point to at least one node in the Source cluster, but they may be configured to automatically discover other nodes within the cluster from that node.
 - A sink worker can only be configured to read from one Source queue (by name) - but that name can exist on multiple nodes and/or clusters.  For a sink node to receive updates from multiple clusters, consistent queue names should be used across the source clusters.
-- Each node will have a configurable number of sink workers, which will be distributed across the source peer nodes (either configured or discovered).  The number of workers can be adjusted via the `remote_console` at run-time.
+  - Queue names are used to identify the party interested in receiving the event.
+- Each node will have a configurable number of sink workers, which will be distributed across the source peer nodes (either configured or discovered).
+  - The number of workers can be adjusted via the `remote_console` at run-time.
+  - The number of worker will constrain the pace at which events can be pulled from a source cluster, and also the workload that a sink cluster can generate on that cluster,
 - There is an overhead of a sink making requests on the source, so each sink worker will backoff if a request results in no replication events being discovered.
-- The sink worker pool does not auto-expand.  It is an operator responsibility to ensure there are sufficient sink workers to keep-up with real-time replication. There is some protection from over-provisioning but not from under provisioning.
-- A sink worker can fetch only one object at a time, and must push that object into the sink cluster before returning to fetch the next available replication event. 
-- A sink-worker will never prompt re-replication.  No hierarchies of replication are supported, each cluster which is to receive replication events must be directly configured as a sink for that source.
+- The sink worker pool does not auto-expand.
+  - It is an operator responsibility to ensure there are sufficient sink workers to keep-up with real-time replication.
+  - There is some protection from over-provisioning but not from under provisioning.
+- A sink worker can fetch only one object at a time, and must push that object into the sink cluster before returning to fetch the next available replication event.
+- A sink-worker will never prompt re-replication, it will only push that update into the local cluster;
+  - The push is configured to put an object `asis` and not to be a coordinated change, so that it will not be passed to the local replication source queue manager
 
-Configuring and enabling source queues and sink workers is sufficient to enable real-time replication.  Other replication features (such as full-sync reconciliation) depend on the queues and workers to operate, but require additional configuration.
+Configuring and enabling source queues and sink workers is sufficient to enable real-time replication.  Other replication features (such as full-sync reconciliation) depend on the queues and workers to operate, but require additional configuration to be triggered.
 
-## Concepts - Replication References
+### Concepts - Replication References
 
 A replication reference is the entity queued to represent an event which has been prompted for replication.  The reference may be the actual object itself, or a reference to it - the queue will automatically switch to using references not objects as the queue expands.  Where a reference is a proxy for a replicated object, when the object is fetched by the sink worker, the fetch API will automatically return the object from the database i.e. this conversion is managed behind the API on the source.
 
 There are three basic ways of creating replication references: real-time, full-sync and folds.
 
-If a node is enabled as a replication source, each PUT that the node coordinates will be sent to the source queue manager to be checked against the source queue configuration, and it will be added to each queue for which there is a configuration match.  The coordinating nodes are not tightly-correlated with the nodes receiving the PUT, and will generally lead to an even distribution of references across the nodes.  Note that PUTs on the write-once PUT path are not coordinated, and so are incompatible with NextGen replication.
+If a node is enabled as a replication source, each PUT that the node coordinates will be sent to the source queue manager to be checked against the source queue configuration, and it will be added to each queue for which there is a configuration match.  The coordinating nodes are not tightly-correlated with the nodes receiving the PUT, and will generally lead to an even distribution of references across the nodes.
+
+> PUTs on the deprecated write-once PUT path are not coordinated, and so are incompatible with NextGen replication.
 
 If NextGenRepl full-sync is enabled, a full-sync sweep may result in deltas being discovered.  The cluster running the full-sync sweep will be automatically configured to queue up any changes where it discovered itself to be more advanced on its local source queue (to be pulled by the remote sink worker).  It is also possible for full-sync to be bi-directional, so that a full-sync process can prompt a remote peer to queue a replication reference where the remote cluster is in advance of itself.  Full-sync is throttled to repair slowly, so generally only a small number of references will be generated for each full-sync sweep, even when deltas between clusters are large.
 
-Replication references may also be generated by aae folds.  As aae folds can prompt large volumes of references, using coverage queries and node_worker pools - the references may be unevenly distributed around the cluster, and also may be concentrated in batches on certain vnodes within the queue.  When performing large folds, test in live-like environments and consider scheduling outside of peak hours.  There are three aae_fold operations that may generate replication references:
+Replication references may also be generated by [AAE folds](/docs/OtherAPI.md#aae-fold-api).  As AAE folds can prompt large volumes of references, using coverage queries and node_worker pools - the references may be unevenly distributed around the cluster, and also may be concentrated in batches on certain vnodes within the queue.  When performing large folds, test in live-like environments and consider scheduling outside of peak hours.  There are three `aae_fold` queries that generate replication references:
 
-- repl_keys_range; to be used either in transition events (when seeding a cluster) or in recovery events (to re-replicate all changes received during a period where there was a known replication issue).  The repl_keys_range query can replicate a whole bucket, or a range of keys within a bucket optionally constrained by a last-modified date range.
-- erase_keys; to be used to erase a range of keys, and if real-time replication is enabled each erase event will also prompt a replication reference to that deletion.
-- reap_tombs; to be used to erase a range of tombstones, and if real-time replication of tombstones is enabled (replication must be specifically configured for tombstone reaps) each reap event will also prompt a replication reference to that reap.
+- `repl_keys_range`; to be used either in transition events (when seeding a cluster) or in recovery events (to re-replicate all changes received during a period where there was a known replication issue).  The `repl_keys_range` query can replicate a whole bucket, or a range of keys within a bucket optionally constrained by a last-modified date range.
+- `erase_keys`; to be used to erase a range of keys, and if real-time replication is enabled each erase event will also prompt a replication reference to that deletion.
+- `reap_tombs`; to be used to erase a range of tombstones, and if real-time replication of tombstones is enabled (replication must be specifically configured for tombstone reaps) each reap event will also prompt a replication reference to that reap.
 
-It is theoretically possible to prompt NextGen replication events through other mechanisms (pre or post commit hooks, or map/reduce jobs).  However, these methods are not subject to any testing as part of the Riak development and release process. 
+It is theoretically possible to prompt replication events through other mechanisms (pre or post commit hooks, or map/reduce jobs).  However, these methods are not subject to any testing as part of the Riak development and release process.
 
-## Concepts - Reconciliation with Active Anti-Entropy
+### Concepts - Reconciliation with Active Anti-Entropy
 
 A full-sync process can be used to reconcile between two clusters which have configured real-time replication.  The purpose is to quickly determine if the two clusters are in sync, and if they are not in sync identify some keys to be repaired.
 
-Full-sync with NextGen replication is dependent on tictacaae active anti-entropy; there is no key-listing form of reconciliation or synchronisation.
+Full-sync reconciliation is dependent on the Tictac AAE form of active anti-entropy being enabled; there is no key-listing form of reconciliation or synchronisation.
 
-The tictacaae solution uses special merkle trees to represent the state of a partition (a subset of a vnode), these merkle trees are not cryptographically secure, however they can:
+The Tictac AAE solution uses special merkle trees to represent the state of a partition (a subset of a vnode), these merkle trees are not cryptographically secure, however the trees:
 
-- be mergeable, multiple trees representing multiple partitions can be quickly merged to represent the combined tree of those partitions.
-- and align with the hashes used internally within the leveled store, so that it is possible to accelerate a key-ordered store when scanning for subsets of segments.
+- Can be merged, multiple trees representing multiple partitions can be quickly merged to represent the combined tree of those partitions.
+- Align with the hashes used internally within the leveled store, so that it is possible to accelerate a key-ordered store when scanning for subsets of segments.
 
 For an overview of the theory behind reconciliation via anti-entropy in Riak [see the Riak Theory Guide](/docs/RiakTheoryGuide.md#anti-entropy).
 
-## Configuring and Starting NextGen Replication
+## Configuration of Real-Time Replication
 
-For this getting started guide, it is assumed that the setup involves:
-
-- 2 x 8-node clusters (A & B) where all data is nval=3, and where application writes may be received by either cluster;
-- 1 x 2-node cluster (a backup cluster - C) where all data is nval=1, which does not receive real-time write activity;
-- A requirement to both real-time replicate and full-sync reconcile between clusters;
-- Each cluster has o(1bn) keys;
-- bi-directional replication required between active (non-backup) clusters.
+Advice on configuration will vary depending on the setup of the clusters, but unless otherwise stated, it is assumed that replication will occur bi-directionally between clusters each with a `n_val` of 3.
 
 ### Setting Delete Mode
 
-Riak can be configured to operate in one of [three possible delete modes](/docs/InstallAndStartGuide.md#configuration-of-riak---delete-mode):
+Riak can be configured to operate in one of [three possible delete modes](/docs/InstallAndStartGuide.md#configuration-of-riak---delete-mode).  When running replication, it is recommended to change from the default setting and use the delete mode of `keep`.  Using an alternative delete mode is tested, but there will be a significantly increased probability of false-negative reconciliation events that may consume resources on the cluster.
 
-- Timeout (default 3s);
-- Keep;
-- Immediate.
+### Enable a Real-Time Source
 
-When running replication, it is recommended to change from the default setting and use the delete mode of `keep`.  Using an alternative delete mode is tested, but there will be a significantly increased probability of false-negative reconciliation events that may consume resources on the cluster.
+There are two configuration items required to setup a source for real-time replication.  These are both set via `riak.conf`:
 
-### Configure real-time replication
+- `replrtq_enablesrc = enabled`;
+  - This is the basic configuration required to inform PUT coordinators to pass changes to the replication source queue on the node.
+- `replrtq_srcqueue = <sink_cluster_name>:<queue_filter>|<sink_cluster_name>:<queue_filter>` ...
+  - The source queue configuration is a pipe-delimited set of queue/filter pairs, where the queue and the filter are split by a `:`.
+  - The queue name is normally set to a reference of the sink cluster which is expected to consume from the queue.
+  - The queue filter will be `any` to enable real-time replication;
+    - The queue filter may be set to `block_rtrq` if the queue is not to support real-time replication, but only be used for either reconciliation of seeding.
+    - The queue filter may be set to `buckettype.<name_of_type>` to only replicate buckets in a certain bucket type.
+    - The queue filter may be set to `bucketname.<name_of_bucket>` or `bucketprefix.<prefix_for_bucket>` to only replicate buckets with a given name or a name with a given prefix.
+      - Bucket name filters will work for typed and legacy buckets, with typed buckets the type will be ignored when using a name or prefix filter.
 
-The first stage is to enable real-time replication.  Each of the active clusters will need to be configured with a source queue for both the peer active cluster and the backup cluster
+Real-time sink must be enabled separately on every node, as a PUT may be coordinated from any vnode (on any node) - regardless of which node received the PUT request.  There is no way of controlling which nodes handle replication references; each node must handle the references for the PUTs that have been coordinated locally.
 
-For a node on cluster_a, the following configuration is required.
+### Enable a Real-Time Sink
 
-> replrtq_enablesrc = enabled
-> replrtq_srcqueue = cluster_b:any|cluster_c:any
+There are five configuration items required to setup a sink for real-time replication.  They are all set via `riak.conf`:
 
-This configuration enables the node to be a source for changes to replicate, and replicates `any` change to queues named `cluster_b` and `cluster_c` - and this queue will need to be configured as the source for updates on the sink cluster.  The configuration is required on each and every node in the source cluster.  Once a node has been enabled as a source, all PUTs that node coordinates will be passed to the queue process to be assessed against the replrtq_srcqueue configuration, and potentially be queued.
+- `replrtq_enablesink = enabled`.
+- `replrtq_sinkqueue = <sink_cluster_name>`;
+  - The name of the queue on any source node or cluster from which this sink may need to consume PUTs.
+- `replrtq_sinkpeers = <ip_addr>:<port>:<protocol>|<ip_addr>:<port>:<protocol>` ...
+  - A pipe delimited list of peers by IP, port and protocol (PB or HTTP).
+  - The peer node must have a listener enabled for that protocol on that port.
+  - For performance, it is recommended to use the PB protocol.
+  - If TLS enablement of the replication communication is required, then PB protocol must be used.
+  - If `replrtq_peer_discovery` is enabled, then the list will be used to discover other peers on the cluster, and the discovered list will be the list actually used.
+  - The list may include nodes in different clusters.
+  - Do not configure all sink nodes to connect to the same source peer, even when peer discovery is enabled.  
+- `replrtq_sinkworkers = <worker_count>`
+  - The count of sink workers which will be used on this node to fetch from replicated objects from the source.
+  - May be limited to control the impact of a sink cluster on the source cluster, in particular when fetching a backlog from the queue.
+- `replrtq_peer_discovery = enabled`
+  - Enables a peer discovery process, which will use the configured peer to discover other peers in the cluster.
+  - The cluster listeners on that protocol must be listening on reachable IP addresses and ports for peer discovery to work (i.e. binding listener to `0.0.0.0` will not work).
+  - If the application requires the standard Riak listener to bound to an unreachable IP address, then the alternative protocol should be used for replication.
 
-For more complicated configurations further queue names can be used, with different filters - filters can be on bucket, bucket-type or bucket prefix.
+The peer discovery process is run periodically on all nodes configured to use discovery.  This means that if a node is joined, downed or left - the change in peer availability will be detected on the sink node.
 
-For the sink cluster (cluster_b), the following configuration is required on node 1:
+Outside of the periodic peer discovery, a backoff algorithm is used on the sink to reduce the frequency of requests to nodes returning error responses, and increase the frequency to nodes continuously having ready replication events on the queue.  This means that sink workers will automatically favour fetching from nodes with backlogs of replication activity.
 
-> replrtq_enablesink = enabled
-> replrtq_sinkqueue = cluster_b
-> replrtq_sinkpeers = <ip_addr_node1_clustera>:8087:pb
-> replrtq_sinkworkers = 16
-> replrtq_peer_discovery = enabled
+### Additional Configuration
 
-This informs this sink node to connect to Node 1 in cluster A, and discover from that node all the nodes in the cluster from this Node, then spread its sink workers across those discovered nodes.  Periodically the node will reconnect to node 1 and re-discover peers - if a node has joined or left the cluster, the peer list will update and the sink workers will be re-distributed across the new list of nodes.
+Further configuration can be added for replication using `riak.conf`:
 
-If Node 1 is down the old list will continue to be used.  If node 1 is down at startup, no peers will be discovered.  So ideally, for resilience, different nodes in the sink cluster should be peered (for discovery) with different nodes in the source cluster.  Multiple peers can be configured within the `replrtq_sinkpeers` to have resilience for discovery.
+- Security configuration to enable authentication and encryption of replication traffic;
+  - `repl_cacert_filename` (required on the source);
+  - `repl_cert_filename` (required on the sink);
+  - `repl_key_filename` (required on the sink, the key associated with the certificate in `repl_cert_filename`);
+  - `repl_username` (required on the sink).
+- `replrtq_compressonwire`;
+  - To enable compression of replicated objects, and will enable zlib compression,
+  - Only enable if objects are known to be compressible, as zlib may be expensive when limited compression can be achieved.
+- `replrtq_vnodecheck`;
+  - The `r` value on the fetch of a replication object from the source (if it has not been queued), and the `w` value on the push of the object into the sink.
+  - The default is `one`, which minimises delay in real-time replication, but it is recommended to use the safer option of `quorum` instead.
+  - Setting to a value other than `one` will reduce the risk of mailbox overloads related to replication backlogs.
+- `repl_reap`
+  - Whether reap requests should be replicated like other changes.
+  - The default is `disabled` for backwards compatibility, but this will require reap jobs to be coordinated across clusters.
+  - When using a `delete_mode` of `keep`, `repl_reap` should be `enabled`.
 
-For the backup cluster (cluster_c), this will need to be a sink for both cluster A and cluster B, and so the following configuration is required on node 1:
+> Note that for the options `replrtq_vnodecheck` and `repl_reap` non-default settings are recommended
 
-> replrtq_enablesink = enabled
-> replrtq_sinkqueue = cluster_c
-> replrtq_sinkpeers = <ip_addr_node1_clustera>:8087:pb|<ip_addr_node1_clusterb>:8087:pb
-> replrtq_sinkworkers = 16
-> replrtq_sinkpeerlimit = 4
-> replrtq_peer_discovery = enabled
-
-If peer_discovery is not used (i.e. `replrtq_peer_discovery = disabled`), then it is an operator responsibility to ensure that every node in the source cluster has an active peer in the sink cluster, but also to adjust those configuration when nodes join or leave.  A node in a source cluster without an active worker consuming from it will not offload its queue - the replication events will simply backup until a peer relationship from the sink is formed.  Sink workers can tolerate communication with dead peers in the source cluster, so sink configuration should be added in before expanding source clusters.
-
-The number of `replrtq_sinkworkers` needs to be tuned for each installation.  Higher throughput nodes may require more sink workers to be added.  If insufficient sink workers are added queues will build up.  The `replrtq_sinkpeerlimit` will determine the maximum number of workers that will be pointed at an individual source node.
+### Monitoring Real-Time Replication
 
 The size of replication queue is logged as follows:
 
@@ -152,59 +205,68 @@ There is a log on each sink node of the replication timings:
 
 `Queue=~w success_count=~w error_count=~w mean_fetchtime_ms=~s mean_pushtime_ms=~s mean_repltime_ms=~s lmdin_s=~w lmdin_m=~w lmdin_h=~w lmdin_d=~w lmd_over=~w`
 
-The mean_repltime is a measure of the delta between the last-modfied-date on the replicated object and the time the replication was completed - so this may vary if prompting replication via aae_fold or reconciliation.  The `lmdin_<x>` counts are the counts of replicated objects which were replicated within a second, minute, hour, day or over a day.
+The `mean_repltime` is a measure of the delta between the last-modified-date on the replicated object and the time the replication was completed - so this may vary if prompting replication due to real-time changes, reconciliation or seeding.  The `lmdin_<x>` counts are the counts of replicated objects which were replicated within a second, minute, hour, day or over a day.
 
-### Configure Full-Sync Reconciliation and Replication (All)
+## Configuration of All-Cluster Reconciliation
 
-To use the full-sync mechanisms, and the operational tools then Tictac AAE must be enabled:
+It is commonly most efficient to reconcile all data, rather than partial data.  If all data is not required, then [per-bucket reconciliation](#configuration-of-per-bucket-reconciliation) can be enabled.  All-cluster reconciliation is much more common than per-bucket reconciliation in production systems.
 
-> tictacaae_active = active
+> Within this guide it is assumed that although different reconciling clusters may have `n_val` settings, all data within a given cluster has the same `n_val`.  It is possible to configure multi-`n_val` all-cluster reconciliation, by varying the `ttaaefs` configuration between nodes - but that is out of scope for this guide.
 
-This can be enabled, and the cluster run in 'parallel' mode - when a backend other than leveled is used.  However, for optimal replication performance Tictac AAE is best run in `native` mode with a leveled backend.  When enabling Tictac AAE for the first time, it will not be usable by full-sync until all trees have been built.  Trees will periodically rebuild, and full-sync should continue to operate as expected during rebuilds.
+To use the inter-cluster reconciliation then Tictac AAE must be enabled in `riak.conf` - `tictacaae_active = active`.
+
+This can be enabled, and the cluster run in `parallel` mode - when a backend other than leveled is used.  However, for optimal replication performance Tictac AAE is best run in `native` mode with a leveled backend.  When enabling Tictac AAE for the first time, it will not be usable by full-sync until all trees have been built.  Trees will periodically rebuild, and full-sync should continue to operate as expected during rebuilds.
 
 Full-sync replication requires the existence of source queue definitions and sink worker configurations.  The same configurations can be used as for real-time replication.  If there is a need to have only full-sync replication without allowing for real-time replication - then the `block_rtq` keyword can be used instead of `any` on the source queue definition.
 
-To enable full-sync replication on a cluster, for all the data in the cluster, the following configuration is required on a cluster_a node to full-sync with cluster_b:
+> In configuration, reconciliation processes are commonly referred to by the initialism `ttaaefs` - TicTac AAE Full-Sync.
 
-> ttaaefs_scope = all
-> ttaaefs_queuename = cluster_b
-> ttaaefs_queuename_peer = cluster_a
-> ttaaefs_localnval = 3
-> ttaaefs_remotenval = 3
->
-> ttaaefs_cluster_slice = 1
+To enable reconciliation an initial configuration is required:
 
-A node can only be configured to full-sync with one other cluster, so if there is a need to full-sync with multiple clusters, different nodes must use different configurations to point at those different clusters.  So for the backup cluster, cluster C node 1 would use:
+- `ttaaefs_scope = all`.
+- `ttaaefs_queuename = <queue_name>`;
+  - This is the queue name to be used by the remote cluster when fetching replication events.
+  - When this node discovers a delta between the clusters, and this cluster has the more up-to-date reference, the replication event will be added to the local source replictaion queue under this name.
+- `ttaaefs_queuename_peer = <queue_name>`;
+  - This is the queue name to be used by the local cluster when fetching replication events from the remote cluster.
+  - Adding a queue name makes full-sync bidirectional.  If this node discovers the remote cluster has a more advanced version, it will send a request to the peer node to queue a replication event for the delta object on the configured queue.
+  - If bidirectional reconciliation is not required, then the queue name should be set to `disabled`.
+- `ttaaefs_localnval = <n_val>`;
+  - The `n_val` to be used on this cluster when comparing to the opposing cluster.
+  - The `n_val` may be different to the remote cluster, but it is preferred to avoid variance in `n_val` within a cluster.
+- `ttaaefs_remotenval = <n_val>`;
+  - The `n_val` to be used on the remote cluster.
+- `ttaaefs_cluster_slice = 1`;
+  - A number between 1 and 4.  All nodes on the same cluster should be given the same slice number.
+  - Each time period has 4 slots, and clusters will schedule the activity in the slice associated with this number.
+  - When configuring bi-directional replication between clusters, use 1 and 3, or 2 and 4 - as slice numbers for each cluster.
+  - When multiple nodes are configured for reconciliation, time ranges are also sliced so that each node has its own time slice to run its reconciliation work.
+    - Overlapping of reconciliation work is not managed through orchestration, but through allocation of slots based on node number (relative place in the list of nodes) and cluster slice.
 
-> ttaaefs_scope = all
-> ttaaefs_queuename = cluster_a
-> ttaaefs_queuename_peer = cluster_c
-> ttaaefs_localnval = 1
-> ttaaefs_remotenval = 3
->
-> ttaaefs_cluster_slice = 3
+Each node has a single manager for reconciliation - the `riak_kv_ttaaefs_manager`.  A manager can only have one configuration, it can manage reconciliation with one cluster for one `n_val` (and for one type, either all-cluster or per-bucket).  If the cluster needs to reconcile with other clusters, or with different settings, then other nodes should handle the alternate configurations.
 
-Node 2 would use the alternative configuration to peer with Cluster B:
+> Reconciliation work is based on comparisons between clusters using AAE folds; so a single peer relationship between just two nodes is sufficient to reconcile the whole cluster.  However, for resilience and capacity reasons, ideally all nodes should be configured with different peer relationships.
 
-> ttaaefs_scope = all
-> ttaaefs_queuename = cluster_b
-> ttaaefs_queuename_peer = cluster_c
-> ttaaefs_localnval = 1
-> ttaaefs_remotenval = 3
-> 
-> ttaaefs_cluster_slice = 3
+To setup a peer relationship to another cluster, the following configuration is required:
 
-Where clusters have different n_vals, these must be configured correctly in the full-sync relationships.  If two clusters (A and B) both have data with different n_vals (i.e. some buckets are n_val 3, and some buckets are n_val 4) - then different nodes will need different configurations, one set of nodes to perform the n_val 3 full-sync operations, and another set of nodes to perform the n_val 4 configurations.
+- `ttaaefs_peerip = <ip_addr>`;
+- `ttaaefs_peerport = <port>`;
+- `ttaaefs_peerprotocol = pb|http`;
+- For security the [settings for real-time replication](#configuration-of-real-time-replication) are used e.g. `repl_cacert_filename` etc.
 
-It is possible to have scopes for full-sync that are limited by bucket or bucket-type.  However, when using such limited scopes, the full-sync process cannot use cached aae tress - and so full-sync comparisons, particularly when confirming no deltas exist, may have significantly higher costs than when using the `all` scope.  Where possible, it is simpler and more efficient to use the `all` scope.  
+The peer will need a schedule to run reconciliation jobs, and is configured by setting:
 
-Then to configure a peer relationship:
+- `ttaaefs_autocheck = <checks_per_day>`.
+- `ttaaefs_allcheck.policy = always`.
+- All other checks should normally set to 0;
+  - `ttaaefs_allcheck`, `ttaaefs_hourcheck`, `ttaaefs_daycheck`, `ttaaefs_rangecheck`, `ttaaefs_nocheck`.
 
-> ttaaefs_peerip = <ip_addr_node1>
-> ttaaefs_peerport = 8087
-> ttaaefs_peerprotocol = pb
+The schedule settings other than `ttaaefs_autocheck` are legacy settings, the intention is that auot checking should be the best policy in almost all scenarios.
 
-Unlike when configuring a real-time replication sink, each node can only have a single peer relationship with another node in the remote cluster.  Note though, that all full-sync commands run across the whole cluster.  If a single peer relationship dies, some full-sync capacity is lost, but other peer relationships between different nodes will still cover the whole data set.  It is only necessary to have one working peer relationship to confirm clusters are in-sync.  If there are multiple active peer relationships between two clusters, some simple offset-based scheduling is managed by Riak to space out the full-sync requests - there is no single coordinating scheduler for full-sync within the cluster.
+The type of check determines the scope of the comparison to be used should the tree comparison show there to be a delta between the clusters.  The 
+
+
+
 
 Once there are peer relationships, a schedule is required, and a capacity must be defined.
 
@@ -252,7 +314,7 @@ If there are 24 sync events scheduled a day, and default `ttaaefs_maxresults` an
 
 To help space out queries between clusters - i.e. stop two clusters with identical schedules from mutual full-syncs at the same time - each cluster may be configured with `ttaaefs_cluster_slice` number between 1 and 4.  Give each cluster a unique number, and use that same slice number on every node.
 
-### Configure Full-Sync Reconciliation and Replication (Per-Bucket)
+## Configuration of Per-Bucket Reconciliation
 
 The `ttaaefs_scope` can be set to a specific bucket.  The non-functional characteristics of the solution change when using per-bucket full-sync.  There is no per-bucket caching of AAE trees, so the AAE trees will need to be re-calculated by scanning the whole bucket for every full-sync check (subject to other restrictions on check type).  So the cost of checking full-sync for an individual bucket in happy-day scenarios is considerably higher than using a scope of `all`.  When deltas are discovered in trees, the scanning required to compare keys and clocks will be limited to the bucket, and so this may be faster.
 
@@ -444,3 +506,7 @@ Handling of tree repairs differs by version of Riak:
 - version < 3.2.3 => there is an automatic workaround, in that full-sync will call trigger_tree_repairs automatically; however it is inefficient (in that some vnodes may unnecessarily rebuild for the broken segments on multiple occasions).
 - version < 3.2.5 => there is a relatively efficient workaround.
 - version >= 3.2.5 => it is expected that the root cause has been fixed, but the workaround remains in place.
+
+## Legacy Replication - riak_repl
+
+> TODO: cover this replication approach (by reference to past docs)
