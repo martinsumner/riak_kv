@@ -53,6 +53,8 @@ The leveled backend has the following characteristics and features:
 - Guarding against out-of-memory errors is an operator responsibility.  The cluster should be expanded if the memory limit is close, the per-vnode memory overhead will not be proactively reduced.
   - Makes use of any spare memory of the system through proactive hints to the file-system page cache.
 
+For further details on the design and implementation of the leveled backend refer to [the Riak Theory Guide](/docs/RiakTheoryGuide.md#the-leveled-backend).
+
 #### Bitcask
 
 The bitcask backend has the following characteristics and features:
@@ -67,6 +69,8 @@ The bitcask backend has the following characteristics and features:
   - Guarding against out-of-memory errors is an operator responsibility.  The cluster should be expanded as the memory limit is reached, the per-vnode memory overhead will not be proactively reduced.
 - No current support for optimised HEAD requests, which can have significant impact on overall efficiency within Riak.
   - Implementations of bitcask have been produced with this optimisation, and may be open-sourced in the future. 
+
+For further details on the design and implementation of the bitcask backend refer to [the Riak Theory Guide](/docs/RiakTheoryGuide.md#the-bitcask-backend).
 
 #### Eleveldb (deprecated)
 

@@ -10,7 +10,7 @@ Objects can be fetched and updated via either a HTTP or Protocol Buffer API.  Wh
   - Always ensure that objects will be supported via HTTP, even when using PB.
 - Using the HTTP API will provide greater flexibility to control access to Riak via standard internet infrastructure (e.g. Web-Application Firewalls, Proxies and Load-Balancers).
 
-> TODO - need a statement (or a pointer to discussions) about roadmap for API
+> New APIs added to Riak will be added to the HTTP API first.  It is expected that in the long term the performance of the HTTP API will be improved, and that the relative ubiquity of HTTP wil evolve the choice of API towards HTTP being the default protocol.
 
 The [PB Object API is described in the riak_pb repository](https://github.com/OpenRiak/riak_pb/blob/e908ddaadc06cb56e248f197dc2dca7d759e53b2/src/riak_kv.proto#L45-L125).
 
@@ -243,3 +243,36 @@ curl -v -X DELETE http://127.0.0.1:8098/types/BType/buckets/BTest/keys/TestKey -
 ## Accessing Legacy Objects
 
 As well as typed buckets, Riak offers support for untyped buckets for backwards compatibility.  Using the HTTP API for such buckets is the same as using typed buckets, except that the URI for keys in untyped buckets is `buckets/Bucket/keys/Key` (i.e. as before but without the prefix of `types\TypedBucket`).
+
+## Performance and Efficiency
+
+### Notes on Implementation
+
+When a request is made to PUT an object in Riak, the PUT is sent to an available primary to coordinate the change.  A Primary vnode is considered available when the node on which it resides is considered by cluster health-checks to be active, and it is currently reachable.  The coordination of a change is the updating of the version history of the object (the version vector), storing the object and prompting replication to other clusters where required. The PUT is then sent to the remaining available primaries (or fallbacks should there be a failure), to be stored at those vnodes if the version history indicates this change is more recent that the currently stored object.
+
+Handling a forwarded PUT is marginally less expensive than coordinating a PUT.
+
+When a request is made to GET an object in Riak, the metadata (containing the vector of the version history) for that object is fetched from each vnode in the preflist.  The first vnode to respond is tasked with fetching the value, and the remaining responses are used to determine whether the fetched value represents the most recent version (and if it is it may be returned to the client as the response).  If a replacement (later) version is available, then that is fetched as the value instead.  If analysis of the version vector and the version of the values, cannot determine which value is up-to-date the full history of unreconciled values is returned as "siblings".
+
+Handling the value fetch on vnode is an order of magnitude more expensive than simply handling the request for metadata.
+
+Each vnode has a single queue through which all requests are received.  There is no priority on this queue, a request cannot be processed until all previous requests have been handled.  Latency on a very busy Riak cluster is generally governed by the vnode queue sizes.  The GET and PUT process are designed to ensure that request performance is never governed by the pace of the longest queue.  Activity can proceed with a quorum of answers, and work is dynamically reduced so that vnodes with longer queues do less work until those queues realign with other vnodes.
+
+### Performance Expectations
+
+Within the object API load distribution is first based on consistent hashing (to find the preflist of vnodes), but the race to support the value fetch in `GET` operations, and also the selection of the coordinator of a `PUT` operation is designed to try and rebalance load discrepancies within a preflist of vnodes.
+
+The Object API is designed to be the most efficient of all the Riak APIs; it is assumed that requests to the Object API will occur with at least an order of magnitude of frequency greater that requests to other APIs.
+
+> The primary target of Riak is not to minimise response times in normal conditions, but to provide for predictable response times in extreme conditions with resource contention, device failure and device recovery.
+
+In summary, the performance targets for the Object API are:
+
+- Without contention, and under healthy conditions, for o(1ms) response times to Object API requests;
+  - achieving one, or sub-one, millisecond latency will depend on infrastructure selection that minimises latency.
+- Under contention, and within failure scenarios, for o(10ms) 99th percentile response times to Object API requests.
+  - It should be possible to maintain controlled response times as the failure is recovered (including repair of lost data), as well as when the failure occurs.
+- As object sizes grow, the growth is response times should be logarithmic not linear - and stability of tail latency should not be impacted
+  - As the differential between the cost of a HEAD request and a GET request expands with the size of objects, the stability of tail latency may actually improve with larger objects.
+
+In Riak, an object of o(1KB) in size is considered to be small, and an object of o(1MB) in size is considered to be large.  For very large objects overall performance will be improved by the sharding of objects within the application.
