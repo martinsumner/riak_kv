@@ -14,7 +14,7 @@ The majority of work within Riak KV can be done using the [Object API](/ObjectAP
 
 The AAE Fold API requires the configuration of `tictacaae_active = active`, otherwise folds will fail.  When using a single leveled backend, this should use the native keystore within leveled.
 
-When using any other backend or multi-backend this will require an additional parallel key-store, which may have an impact on the achievable PUT throughput, and the memory used by Riak.  The use of a parallel backend also requires periodic key-store rebuilds, to ensure that the key-store correctly represents the content in the backend store.
+When using any other backend or multi-backend this will require an additional parallel keystore, which may have an impact on the achievable PUT throughput, and the memory used by Riak.  The use of a parallel backend also requires periodic keystore rebuilds, to ensure that the keystore correctly represents the content in the backend store.
 
 > When using parallel mode, the parallel store must be configured with `tictacaae_storeheads = enabled` to use the full functionality of AAE Folds.
 
@@ -143,19 +143,19 @@ The AAE Fold implementation has similarities to [the Query API](/docs/QueryAPI.m
   - In Riak 3.4 the query server has a different underlying implementation to the query server used in the Query API; but this may change to use a common implementation in a future release.
 - Folds are run over a covering set of vnodes, i.e. either `RingSize div n_val` or `(RingSize div n_val) + 1`.
 - Folds will first take a snapshot of each vnode, before running each vnode query against the snapshot.
-  - When running in parallel mode, this will be a snapshotn of the parallel keystore, in native mode this will be a snapshot of the leveled ledger (the native keystore).
+  - When running in parallel mode, this will be a snapshot of the parallel keystore, in native mode this will be a snapshot of the leveled ledger (the native keystore).
   - The snapshot requests will need to wait in the vnode queue, but operations on the snapshot are not constrained by the queue.
-  - The snapshots will timeout, and a fold that runs after the timeout is likely to fail;
-    - On native stores the timeout is covered by `leveled.snapshot_timeout_long`.  On parallel stores it defaults to 2 days.
+  - The snapshots have a timeout, and a fold that runs after the timeout is likely to fail;
+    - On native stores the timeout for AAE folds is configured via `leveled.snapshot_timeout_long`.  On parallel stores it defaults to 2 days.
 - The folds will then scan across the keys and metadata using the filters provided, accumulate results, and return the results to the controlling node for the query once complete.
-  - Unlike the query API there is no sending of partial results, and waiting for acknowledgement.
+  - Unlike the Query API, there is no sending of partial results, and waiting for acknowledgement.
   - AAE folds will continue to run, even when the query server for the request has timed out.
   - If a queue-type accumulator is used, the results are sent to the queue in batches during the fold, and the final result returned to the query server is just a count.
-- Once all vnode folds have completed and sent results, the query server combined the results and returns the final result set back to the requestor.
+- Once all vnode folds have completed and sent results, the query server wil combine the results and return the final result-set back to the requestor.
 
 #### Node worker pools
 
-Riak API requests generally have only limited constraints.  When there exists contention over available CPU cores within a busy cluster, the contention is managed by the Erlang scheduler, and the database backends are designed to degrade gradually - to slow smoothly as available resources are restricted.
+Riak API requests are generally not subject to constraints on the resources they use.  If there exists contention over available CPU cores within a busy cluster, the contention is managed by the Erlang scheduler, and the database backends are designed to degrade gradually - to slow smoothly as available resources are restricted.
 
 In contrast, the AAE Fold API has specific constraints on throughput, governed by the node worker pools.  These pools are defined to constrain concurrency for operational queries, to provide an upper limit on how many CPU cores may be used by different classes of operational work.  There is no guarantee that worker pools will be able to use their limit - use of each core is still managed fairly by the erlang scheduler for that core.
 
@@ -163,13 +163,14 @@ The node worker pool can be configured via the `worker_pool_strategy` in riak.co
 
 - `none`; do not use node worker pools.
   - aae_folds and other operational work will be fairly scheduled by the erlang scheduler alongside other activity.
+  - the folds will share the `vnode_worker_pool` used by folds for the Query API.
 - `single`; use a single pool of work for all operational work.
   - This means the whole bandwidth for operational work can be consumed by any operational work.
   - No segmentation, so one set of jobs may prevent other work from finding available capacity.
 - `dscp`; divides pools up into categories based on the network pooling strategy of differentiated services.
   - There is no Expedited Forwarding queue, this is assumed to be the `vnode_worker_pool`.
   - There are four Assured Forwarding queues: AF1 (cached tree rebuilds, hot backups); AF2 (legacy key-listing); AF3 (AAE folds); AF4 (AAE folds).
-  - There is a single Best Endeavours queue, this is used for the rebuild of parallel aae store rebuilds.
+  - There is a single Best Endeavours queue, this is used only for parallel aae store rebuilds.
 
 When queueing items via a fold (e.g. `repl_keys_range`, `repair_keys_range`, `find_tombs` and `reap_tombs`), if a smaller node worker pool is used, then items will be added to the queue in batches by vnode.  When items are dequeued, this may result in phases of concentrated activity on particular preflists.
 
@@ -186,7 +187,7 @@ Some considerations on the efficiency of AAE Folds:
 
 The AAE folds will scan over blocks of keys and metadata.  The performance of AAE fold requests are impacted by the volume of metadata per key, and the throughput per CPU core is likely to be lower than with the [Query API](/docs/QueryAPI.md#performance-and-efficiency) - where only blocks of index entities need to be scanned.  Unlike the Query API, none of the accumulators are required to deduplicate, so there is no related impact on performance.
 
-Where a fold is returning a list of keys, or keys and clocks, it is necessary for the node coordinating the fold to hold the full result set in memory; and on conclusion of the fold the result will need to be copied at least once to produce an API response.  The performance of the fold will also be impacted by an accumulator which grows with the number of entries covered.
+Where a fold is returning a list of keys, or keys and clocks, it is necessary for the node coordinating the fold to hold the full result-set in memory; and on conclusion of the fold the results will need to be copied at least once to produce an API response.  The performance of the fold will also be impacted by an accumulator which grows with the number of entries covered.
 
 > It is important to consider the memory impact of running an AAE fold on the node that handles the request, especially when using a `find_keys` fold.
 
@@ -301,13 +302,13 @@ Support for these data types is unchanged since Riak 2.2.3, so refer to the [leg
 
 Before using data-types, there are important caveats within the current implementation to consider:
 
-- All CRDTs implement "Action At a Distance", that is to say the application does not provide an identity of the actor making the request, so other than for grow-only sets CRDT updates are not idempotent.
+- All CRDTs implement "Action At a Distance", that is to say the application does not provide an identity of the actor making the request.  Due to this, other than for grow-only sets, CRDT updates are not idempotent.
   - The correct handling of failure of an individual request is not presently defined.
 - Riak is designed for the storing of many keys, where the load of object requests is spread roughly evenly across the key-space; this is also true for CRDTs.  Do not use individual counters, for example a single hit counter for an application, that may create a __hot__ key that is accessed much more frequently than other keys.
 - Both sets and maps have specific constraints in Riak 3.4 where the growth of components within an object is not handled efficiently.
 - There is no in-built support for querying data within data-types, the Data Type API is incompatible with the [Query API](/docs/QueryAPI.md).
 
-> The approach to supporting data types is expected to be evolved significantly in future Riak releases; which may see significant changes to both sets and maps, and impact the ability to use those data types in future releases.
+> The approach to supporting data types is expected to be evolved significantly in future Riak releases; which may result in significant changes to both sets and maps, and change the use of those data types in future releases.
 
 ## The Map/Reduce API
 
@@ -323,7 +324,7 @@ The list API supports the listing of keys and buckets.  The List API is deprecat
 
 The APIs are unchanged since Riak 2.2.3, so refer to the legacy documentation for information on [list keys](https://docs.riak.com/riak/kv/2.2.3/developing/api/http/list-keys/index.html) o [list buckets](https://docs.riak.com/riak/kv/2.2.3/developing/api/http/list-buckets/index.html).
 
-> The use of list keys or list buckets may have a critical impact on the performance on production clusters.  Only use the AAE Fold alternatives on production systems.
+> The use of list keys or list buckets may have a critical impact on the performance of production clusters.  The AAE Fold alternatives are safe to use on production systems as long as two copies of the result-set can be held within available memory on a single node.
 
 ## Legacy Query API
 

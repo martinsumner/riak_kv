@@ -35,7 +35,7 @@ Riak is designed to be eventually consistent, in that it is:
 
 - Permissive about accepting updates, ensuring data is stored securely on behalf of the application, even when the current state of the data relative to the update cannot be guaranteed;
   - either because some state may be in geographically diverse location, and waiting for verification of the present state would cause an unacceptable increase in response time,
-  - or because failure of individual components has limited visibility of the current state.
+  - or because failure of individual components has limited the visibility of the current state.
 - Definitive that all changes will eventually be visible;
   - not just because data is replicated between nodes and between clusters,
   - but also because it is continuously reconciled, with background process that efficiently analyse the overall system for discrepancies and proactively heal those deltas without operator intervention,
@@ -61,7 +61,7 @@ In general, most applications that depend on Riak evolve strategies to restrict 
 
 The default GET and PUT options are based on validating quorum within the cluster before returning a response to the client.  Quorum meaning that a majority of vnodes within a preflist must have provided acknowledged input to the transaction.  So although Riak offers a guarantee that data will be eventually consistent, within a single, stable cluster results will generally be immediately consistent.  A read that follows a write will see the most up-to-date value, as a read must consult a majority of vnodes, and a write must update a majority of vnodes for that key.
 
-Quorum is the default for use [the Object API](/docs/ObjectAPI.md), but not the default for [the Query API](/docs/QueryAPI.md).
+Quorum is the default for [the Object API](/docs/ObjectAPI.md), but not the default for [the Query API](/docs/QueryAPI.md).
 
 All index updates within a vnode are transactional to the object change; so Riak is different to some other distributed databases in that queries in a single, stable cluster will generally immediately reflect the latest update.  There is no post-update delay for indices to be updated. However queries have to be distributed across a covering set of primary vnodes, and this covering set will include a single replica of each object.  If a primary vnode is active but not up-to-date (i.e. due to a recent recovery from failure or corruption), query results are not validated by checking results between replicas.  This can be partially mitigated by relying on operator intervention during recovery (using the  `participate_in_coverage` setting to block a recovering node from participating in queries).
 
@@ -87,9 +87,9 @@ If there are two versions of an object, and neither version vector is dominant, 
 
 These two characteristics are important to avoid sibling explosion, which might otherwise result when multiple application processes are concurrently trying to update the same object (and correct the sibling state).  It is also important to the pruning of version vectors.
 
-> The actors within the version vectors are the unique vnode IDs that have coordinated change on an object.  The number of actors will grow over time as an object is updated as an object is updated by different vnodes in a preflist, via different cluster preflists and as the membership of a preflist is changed by the promotion of fallbacks during failure or the reshuffling of vnodes of cluster change.
+> The actors within the version vectors are the unique vnode IDs that have coordinated change on an object.  The number of actors will grow over time as as an object is updated by different vnodes in a preflist, via different cluster preflists and as the membership of a preflist is changed by the promotion of fallbacks during failure or the reshuffling of vnodes on cluster change.
 
-As the list of actors in the version vector will grow over time, the version vector needs to support pruning.  Pruning is not coordinated, and happens independently on each vnode (and on each cluster) for that object key when the vector exceeds a configured size limit.  Pruning of old information from version vectors will lead to false conflicts between version vectors: but this is highly unlikely to cause siblings, as the "dot" of the content can be used to confirm that the current object was not related to the portion of the version vector in conflict (i.e. it was not coordinated by a pruned actor).
+As the list of actors in the version vector will grow over time, the version vector needs to support pruning.  Pruning is not coordinated, and happens independently on each vnode (and on each cluster) for that object key, when the vector exceeds a configured size limit.  Pruning of old information from version vectors will lead to false conflicts between version vectors: but this is highly unlikely to cause siblings, as the "dot" of the content can be used to confirm that the current object was not related to the portion of the version vector in conflict (i.e. it was not coordinated by a pruned actor).
 
 Detailed information on the implementation of dotted version vectors in Riak can be found in the [original evaluation](https://asc.di.fct.unl.pt/~nmp/pubs/inforum-2011-2.pdf).
 
@@ -107,7 +107,7 @@ Riak tracks the current state of the Version Vectors across all the key space to
 
 The active anti-entropy process is designed to be highly efficient, and very quick, when confirming no deltas exist.  The work to discover and repair deltas is relatively expensive - but is throttled in default configuration to avoid overloading the database.  As there are other anti-entropy mechanisms (e.g. quorum reads with read repair); slow repair is preferred to high repair-related resource utilisation.
 
-The anti-entropy trees have 1,024 branches, and each branch has 1,024 leaves.  Each key in the store is mapped by a hash algorithm into a given leaf.  The hash value of that leaf is calculated by taking a hash of the Key and version vector for the object combined - and then performing an `xor` operation on all the hashes within that leaf.  The hash value for each branch is the hash of each leaf in the branch combined using `xor`.
+The anti-entropy trees have 1,024 branches, and each branch has 1,024 leaves.  Each key in the store is mapped by a hash algorithm into a given leaf.  The hash value of that leaf is calculated by taking a hash of the Key and version vector combined - and then performing an `xor` operation on all the hashes within that leaf.  The hash value for each branch is the hash of each leaf in the branch combined using `xor`.
 
 Each vnode has a cached tree for each preflist the vnode supports (with a single `n_val` in the cluster there will be `n_val` preflists in each vnode, and hence `n_val` cached trees). The cached tree represents the state for the whole preflist on the vnode.  When an object is modified, then the object key and the both the previous and current version vector is sent to the `aae_controller` for the vnode; which will update the correct preflist's tree cache, using a double xor operation (in effect one to remove the previous hash, and one to add the new hash).
 
@@ -145,11 +145,11 @@ The Riak KV store is built on top of a generic platform for building distributed
 - `riak_core_ring_manager`
   - A process that marshalls updates to the ring, and ensures that stable versions of the ring are available to database processes via a low latency cache.
 `riak_core_vnode`
-  - The behaviour which the `riak_kv_vnode` implements, that defines the callback functions necessray for the vnode to handle requests and also changes to the ring (e.g. handoffs).
+  - The behaviour which the `riak_kv_vnode` implements, that defines the callback functions necessary for the vnode to handle requests and also changes to the ring (e.g. handoffs).
 `riak_core_vnode_proxy`
   - Every vnode has a proxy that forwards requests to the vnode, whilst tracking the size of the message queue on the vnode.
   - The proxy is repsonsible for blocking access to the vnode when the message queue (also known as the mailbox) is overloaded.
-  - All vnode requests are forwarded through the proxy, but Responses bypass the proxy and are sent directly back to the requesting process.
+  - All vnode requests are forwarded through the proxy, but responses bypass the proxy and are sent directly back to the requesting process.
 `riak_core_vnode_manager`
   - Responsible for starting local vnodes when required by the ring, and stopping those vnodes no longer required.
     - The receipt of a request for a vnode that is not started locally, will also prompt the starting of a vnode - there is no wait for periodic ring checks to detect the change of topology.
@@ -193,7 +193,7 @@ In Riak 3.4, the bitcask backend does not support three important operations:
 
 The leveled store is written in Erlang, where each entity (e.g. file or manifest) in the datastore has a dedicated owning process; and a consistent view is maintained through that ownership model rather than by the management of locks to marshall access to resources between processes.  It is designed to be scaled out by running many stores, not by parallelism within the store itself.
 
-> The design of leveled is based on the log-structure merge-tree (LSM) data structure, but unlike most other implementations of LSM trees the values are set-aside on receipt, and only keys and metadata are kept within the LSM file tree.
+> The design of leveled is based on the log-structure merge-tree (LSM) data structure, but unlike most other implementations of LSM trees the values are set-aside on receipt, and only keys and metadata are kept within the LSM tree.
 
 The setting-aside of values reduces the write amplification associated with the compaction of the LSM tree, especially when the object metadata is much smaller in bytes than the object value.  It also provides a differential cost of read; whereby a HEAD request (to return metadata) is much lower cost than a GET request (return the whole object).  This differential cost makes the store suited to environments where HEAD requests are more common than GETs; which is the case within Riak as each cluster GET is formed normally from the result of 3 backend HEAD requests and just a single backend GET.
 
@@ -229,7 +229,7 @@ Each process within Leveled has an in-memory state, that contains:
 - Information on the structure of the data kept by that process (e.g. a map of key ranges to on-disk data);
 - A small cache of high priority information (e.g. an in-memory view of recent updates, or recent reads).
 
-These caches are designed to ensure that every CRUD request can be fulfilled on average by 1 disk action or fewer.  All compaction activity is based on bulk writes of fresh files, not on mutation of existing files.  The leveled store, when compared to alternatives, requires relatively low volumes of I/O requests and attempts.
+These caches are designed to ensure that every CRUD request can be fulfilled on average by 1 disk action or fewer.  All compaction activity is based on bulk writes of fresh files, not on mutation of existing files.  The leveled store, when compared to alternatives, requires a relatively low volume of internal I/O actions per external request.
 
 > The leveled is focused on supporting characteristics that enable the file system page cache to be more effective, rather than managing its own caches to optimise performance.
 
@@ -241,7 +241,7 @@ The files within the Journal are ["Constant Database" files](https://en.wikipedi
 
 The files within the Ledger are loosely based on the same concept as [block-based Static Sorted Tables SST (SSTs)](https://github.com/facebook/rocksdb/wiki/A-Tutorial-of-RocksDB-SST-formats).  Blocks are not governed by size (in bytes), but by number of keys which they contain (between 20 and 60 depending on the type of key); there is no alignment between blocks in the leveled SST files and blocks in the file system.  The table is divided into slots, where a slot is a group of five contiguous blocks (with between 128 and 256 keys per slot).
 
-Data is serialised for persistence in Journal or Ledger files using a combination of the `zstd` compression algorithm and the Erlang standard `term_to_binary/1` function.  Other compression algorithms are supported - `none`, `native` (zlib) and `lz4`. In general, only `zstd` should be used, but in some specific scenarios `none` may be valid configuration for the Journal.  Grouping for serialisation is at an individual object level in the Journal, and by block in the Ledger - and so accessing an individual key in the ledger requires a whole block to be deserialised.
+Data is serialised for persistence in Journal or Ledger files using a combination of the `zstd` compression algorithm and the Erlang standard `term_to_binary/1` function.  Other compression algorithms are supported - `none`, `native` (zlib) and `lz4`. In general, only `zstd` should be used, but in some specific scenarios `none` may be valid configuration for the Journal.  Grouping for serialisation is at an individual object level in the Journal, and by block in the Ledger - accessing an individual key in the ledger requires a whole block to be deserialised.
 
 #### Data safety and security
 
@@ -258,7 +258,7 @@ More detailed information on safety and security features [may be found in the l
 
 Compaction is managed in the ledger by the penciller's clerk (the `leveled_pclerk`), and in the Journal by the inker's clerk (the `leveled_iclerk`).
 
-Compaction of the ledger is enforced by fresh write activity.  New writes to the store are appended to the active Journal file and then the related key and metadata changes added to an in-memory cache of recent ledger updates within the Bookie.  When the in-memory cache reaches an approximate threshold then the cache will be flushed to the in-memory cache of the Penciller.  When the number of the Penciller's in-memory cache lines reaches an approximate threshold, it must write a new "level-zero" file to disk.
+Compaction of the ledger is enforced by fresh write activity.  New writes to the store are appended to the active Journal file and then the related key and metadata changes added to an in-memory cache of recent ledger updates within the Bookie.  When the in-memory cache reaches an approximate threshold then the cache will be flushed to the in-memory cache of the Penciller.  When the number of the Penciller's in-memory cache lines reach an approximate threshold, it must write a new "level-zero" file to disk.
 
 > All thresholds and timeouts in leveled are approximate, as any configured values must be jittered to avoid accidental coordination of activity between vnodes, either within a node or within a preflist.
 
