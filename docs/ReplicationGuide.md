@@ -358,7 +358,7 @@ To force peer discovery to immediately update the list of peers on a sink node (
 riak_client:replrtq_reset_all_peers(QueueName)
 ```
 
-When introducing a new node to a sink cluster, if the new node is configured as a sink node it will begin to consume changes from the source as soon as the node as started - which may be prior to joining the cluster.  This will cause a temporary loss of in-sync state for inter-cluster reconciliation.  It is possible to suspend and resume a node from acting as a sink using:
+When introducing a new node to a sink cluster, if the new node is configured as a sink node it will begin to consume changes from the source as soon as the node has started - which may be prior to joining the cluster.  This will cause a temporary loss of in-sync state for inter-cluster reconciliation.  It is possible to suspend and resume a node from acting as a sink using:
 
 ```erlang
 riak_kv_replrtq_snk:suspend_snkqueue(QueueName)
