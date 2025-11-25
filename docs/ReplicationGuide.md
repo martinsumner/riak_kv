@@ -25,9 +25,10 @@ The guide is split into the following sections:
 - [Configuration of real-time replication](#configuration-of-real-time-replication).
 - [Configuration of all-cluster reconciliation](#configuration-of-all-cluster-reconciliation).
 - [Configuration of per-bucket reconciliation](#configuration-of-per-bucket-reconciliation).
+- [Managing a cluster migration](#migrating-a-cluster).
 - [The external Replication API](#replication-api).
-- [Operations and the troubleshooting of replication](#monitoring-and-run-time-changes).
-- [Configuring riak_repl](#legacy-replication---riak_repl).
+- [Operations and the troubleshooting of replication](#monitoring-and-runtime-changes).
+- [Configuring `riak_repl`](#legacy-replication---riak_repl).
 - [Replication scope](#replication-scope).
 
 ## Overview
@@ -114,7 +115,7 @@ If a node is enabled as a replication source, each PUT that the node coordinates
 
 > PUTs on the deprecated write-once PUT path are not coordinated, and so are incompatible with replication.
 
-If [reconciliation is enabled](#concepts---reconciliation-with-active-anti-entropy), a reconciliation check may result in deltas being discovered.  The node running the check will be automatically configured to queue up replication references for any required object on the node replication queue, where the local version of the object was discovered to be more advanced than the object in the remote cluster.
+If [reconciliation is enabled](#configuration-of-all-cluster-reconciliation), a reconciliation check may result in deltas being discovered.  The node running the check will be automatically configured to queue up replication references for any required object on the node replication queue, where the local version of the object was discovered to be more advanced than the object in the remote cluster.
 
 It is also possible for reconciliation to be bidirectional, so that a check can prompt a remote peer to queue a replication reference where the remote cluster holds the more advanced version.
 
@@ -321,6 +322,24 @@ When using per-bucket full-sync, and performing a rolling upgrade to Riak 3.2.3 
 - `legacyformat_tictacaae_tree = enabled`
 
 There are significant memory improvements related to the Riak 3.2.3 tree format, so the configuration should be reversed after the rolling upgrade has completed.  There are no inter-cluster issues with tree versions, it is only an issue when merging trees within a cluster to provide a cluster-wide view of a tree.
+
+## Migrating a cluster
+
+Most operational processes in Riak are supported through simple configuration changes, in-place upgrades or a rolling replacement.  There may be some exceptional changes which require a full cluster migration e.g.: changing the default `n_val`, or resizing the ring.  In a cloud-like environment, where there are no capital costs of temporary infrastructure; this is a relatively simple and low-risk process with replication.
+
+The following stages are required:
+
+- [Initiate a new cluster](/docs/BuildAndScaleClusterGuide.md) with the correct configuration (e.g. alternative ring-size).
+- Configure a [new real-time source queue](#enable-a-real-time-source) on the current cluster for the replacement cluster.
+- Enable [sink workers on the new cluster](#enable-a-real-time-sink) to begin to consume real-time changes.
+- Use the [AAE folds](/docs/OtherAPI.md#aae-fold-api) `list_buckets` and `repl_range_keys` to queue up data to seed the new cluster;
+  - Ensure that the old cluster is configured with a sufficiently high `replrtq_overflow_limit` per-node, to have a large enough on-disk queue to avoid discarding replication events;
+  - [Tune the sink workers](#making-runtime-changes-to-the-sink) on the replacement cluster to avoid overloading the new cluster.
+- Enable [reconciliation](#configuration-of-all-cluster-reconciliation) on the replacement cluster.
+
+Once the two clusters are in an `in_sync = true` state the migration is complete, and application traffic may be switched to the new cluster, and the old cluster can be decommissioned.  It is common for production systems with o(10TB) of data to manage this process in 24 to 72 hours.
+
+> If possible, migrating a cluster should be a rehearsed process, just like any other [repair or replace operational change](/docs/OperationsAndTroubleshootingGuide.md#replace-repair-and-recover).
 
 ## Replication API
 
