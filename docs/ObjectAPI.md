@@ -268,10 +268,13 @@ The Object API is designed to be the most efficient of all the Riak APIs; it is 
 
 In summary, the performance targets for the Object API are:
 
-- Without contention, and under healthy conditions, for o(1ms) response times to Object API requests;
-  - achieving one, or sub-one, millisecond latency will depend on infrastructure selection that minimises latency.
+- Without contention and under healthy conditions, for objects of 100KB in size with o(10) index entries per object (via the HTTP API) into a store with > 100M records - when measured from the application;
+  - 3ms per GET (mean).
+  - 7ms per PUT (mean).
+  - With high-speed infrastructure, a 1ms mean response times should be achievable with smaller objects that have fewer index entries.
 - Under contention, and within failure scenarios, for o(10ms) 99th percentile response times to Object API requests.
   - It should be possible to maintain controlled response times as the failure is recovered (including repair of lost data), as well as when the failure occurs.
+  - In general the 99th percentile should be less than twice the mean.
 - As object sizes grow, the growth is response times should be logarithmic not linear - and stability of tail latency should not be impacted
   - As the differential between the cost of a HEAD request and a GET request expands with the size of objects, the stability of tail latency may actually improve with larger objects.
 
