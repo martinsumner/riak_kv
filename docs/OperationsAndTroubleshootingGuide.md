@@ -3,6 +3,7 @@
 The following sections provide guidance when operating or troubleshooting a Riak cluster:
 
 - [Handling failure - replace, repair and recover](#replace-repair-and-recover)
+- [Upgrading Riak on a node](#upgrading-a-node)
 - [Using the remote console](#remote-console)
 - [Accessing extended configuration options](#extending-configuration)
 - [Making use of logging and statistics](#logging-and-statistics)
@@ -12,6 +13,7 @@ The following sections provide guidance when operating or troubleshooting a Riak
 - [Understanding the contents of a Riak cluster](#data-inspection)
 - [Volume and performance testing](#volume-and-performance-testing)
 - [Backing up a cluster](#backup-options)
+- [Operation checklist](#operation-checklist)
 - [Advanced troubleshooting of Riak internals](#advanced---troubleshoot-via-the-erlang-vm)
 
 ## Replace, Repair and Recover
@@ -146,6 +148,10 @@ Refer to the [API guide for AAE Fold](/docs/OtherAPI.md#aae-fold-api) for inform
 The aae_fold will send repair events to the `riak_kv_reader` queue, and progress can be tracked by tracking the queue's log outputs.  There is an automated background process on each node that will consume repair events from the queue, and trigger read repair (if required) by a clientless GET of the object.  Each node's reader queue is limited to 1M requests, and requests over this limit will be discarded.  This limit is not configurable in Riak 3.4.  The `riak_kv_reader` process will dequeue items from the `riak_kv_reader` queue and prompt an internal GET request; which, should there be a discrepancy, prompt a repair via `read_repair`.
 
 Repair key range operations are a potentially efficient method for repairing keys across a cluster following a known incident, the impact of which was restricted to a given time range; and may prove to be quicker in some circumstances than waiting for the delta to heal via active anti-entropy.
+
+## Upgrading a node
+
+> TODO
 
 ## Remote Console
 
@@ -440,6 +446,49 @@ The tested mechanism for backing up a bitcask store, requires the node to be sto
 #### Backup - ring folder, and cluster metadata
 
 As well as the storage backend data folder, a Riak node also stores data in a ring folder, and in a cluster metadata folder - with both found in the `platform_data_dir` with a standard configuration.  Backing up these folders is critical to the recovery should all nodes in the cluster be lost.  They are required for the cluster to understand the distribution of data.  The restored data alone, without this metadata, will be inaccessible.
+
+## Operation Checklist
+
+In the guide to building and scaling a cluster, the section on [choosing infrastructure](/docs/BuildAndScaleClusterGuide.md#choosing-infrastructure) provides a checklist of things to consider at the design stage, and it is worth considering the issues highlighted in that guide when troubleshooting operational issues:
+
+- The need to avoid the accidental concurrent scheduling of expensive operational processes;
+  - Disk trim jobs,
+  - Software RAID integrity checks,
+  - Security software sweeps.
+- Other than operational tools, Riak should be the only software running on a node;
+  - By default in Riak, Erlang schedulers are not pinned to CPU cores, but software consuming an entire core can still cause variation in performance.
+- Subtle network issues may occur in distributed systems below network bandwidth limits;
+  - TCP TIME_WAIT delays leading to port exhaustion and 1s, 3s or 5s SYN connection delays,
+  - TCP slow-start triggered by packet loss related to Incast and buffer overflows.
+- HTTP limits on request and response header sizes, and character usage may exist throughout the software stack;
+  - In application HTTP clients and also in proxies.
+- Avoid operating-system optimisations that may cause periodic spikes in activity related to garbage collection or realignment;
+  - `transparent_huge_pages` should be disabled to avoid unpredictable resource consumption.
+
+Monitoring of activity related to these issues is important.  Further, it is vital to monitor the key infrastructure limits relevant to Riak environments.
+
+- All critical space limits must be proactively monitored, to react when within 20% of thresholds:
+  - Disk space.
+  - Memory used by the Riak process,
+    - Low thresholds for memory should be used because of the value in over-provisioning memory, and the possibility for large requests to trigger volatile changes in memory demand.
+  - Open file descriptors.
+- Utilisation limits should be monitored for trends that cluster expansion is required, due to repeated breaches of thresholds in:
+  - Interface bandwidth.
+  - CPU utilisation.
+  - Disk I/O operations (especially when I/O is limited by cloud providers).
+  - Disk `await` times.
+
+> The thresholds for monitoring may vary depending on operational speed with which new nodes can be procured, initialised and deployed to.
+
+Riak should be deployed into consistent environments using automation where possible:
+
+- When building Riak, the local SSL library will be used to provide support for TLS security;
+  - Consistency of environments between packaging and deployment is important.
+- The `riak.conf` file should be under configuration control;
+  - the version in configuration management should be updated afresh when Riak is upgraded, to ensure the deployed version reflects new defaults.
+- Bucket properties need to be consistent across clusters, and so may be managed through automated configuration.
+
+Automation of Riak operations is recommended where possible.  However, care must be taken to ensure operational scripts wait for node transfers to complete when performing changes - and this must account for the fact that handoffs may not trigger immediately.
 
 ## Advanced - troubleshoot via the Erlang VM
 

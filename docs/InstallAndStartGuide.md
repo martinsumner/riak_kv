@@ -294,7 +294,7 @@ Although configuring `pr`/`pw` to values greater than 1 may be used to indirectl
 
 If both `pr` and `notfound_ok` are left at defaults, there is a potential issue when at least two nodes have failed and for some objects 2 of the 3 vnodes are unpopulated fallbacks.  In this case, without changing defaults, the two unpopulated fallback vnodes can return `not_found` and the GET request can achieve quorum and return a false `not_found` to the client.  By configuring either `{pr, 1}` or `{notfound_ok, false}`, when there is only one populated/primary vnode, the GET request must wait for this vnode to respond.
 
-As a consequence though, in the case where there are at least three node failures, and for an unfortunate preflist all three primaries are down - this will then lead to failing requests, which may be preferable to false `not_found` responses.
+As a consequence though, in the case where there are at least three node failures, and for an unfortunate preflist all three primaries are down - this will then lead to failing requests, though this may be preferable to false `not_found` responses.
 
 #### Property - backend
 
