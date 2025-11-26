@@ -95,7 +95,7 @@ The eleveldb backend has the following characteristics and features:
 The in-memory backend has the following characteristics and features:
 
 - Not persisted, all data on an individual node will be lost on restart.
-  - Note that Riak clusters are resilient to the loss of data on a single node, but constraining the ability to perform rolling restarts of Riak due to data loss, may cause operational overheads.
+  - Note that Riak clusters are resilient to the loss of data on a single node, but constraining the ability to perform [rolling restarts](/docs/OperationsAndTroubleshootingGuide.md#rolling-restart) of Riak due to data loss, may cause operational overheads.
 - Based on the erlang ETS tables.
 - Has crude and imperfect handling of out-of-memory issues to help limit the size of each individual vnode store.
 - Supports secondary index entries, but will not support the full Riak Query API.
