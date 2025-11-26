@@ -86,13 +86,14 @@ bin/riak admin cluster --help
 For instances deployed using packages, startup and shutdown should using `systemd` e.g. `service riak start`, `service riak ping` and `service riak stop`.
 
 Help for further console activities can be found via:
+
 ```bash
 sudo riak --help
 sudo riak admin --help
 sudo riak admin cluster --help
 ```
 
-Starting Riak may require a higher `ulimit` to be set within the shell - a limit of 100000 will be acceptable for small-scale non-production systems, but larger limits will be needed for full-scale production systems.
+Starting Riak may require a higher `ulimit` to be set within the shell - a limit of 100000 will be acceptable for small-scale non-production systems, but larger limits will be needed for full-scale production systems.  When Riak is installed as as package, then the default limit is increased using the `LimitNOFILE` file option within the service definition.
 
 ### Configuration of Riak - key riak.conf changes
 

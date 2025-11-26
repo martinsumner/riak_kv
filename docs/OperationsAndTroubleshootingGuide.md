@@ -18,15 +18,17 @@ The following sections provide guidance when operating or troubleshooting a Riak
 
 There are several potential repair and recovery processes for handling different scenarios:
 
-- [proactive replace](#proactive-replace);
-- [reactive replace](#reactive-replace);
-- [leveled backend repair](#repair-an-individual-leveled-store);
-- [repairing a single vnode](#repair-an-individual-vnode);
-- [repairing a key range](#repair-key-ranges).
+- [Proactive replacement](#proactive-replacement);
+- [Reactive replacement](#reactive-replacement);
+- Rolling replacement
+- Rolling restart
+- [Leveled backend repair](#repair-an-individual-leveled-store);
+- [Repairing a single vnode](#repair-an-individual-vnode);
+- [Repairing a key range](#repair-key-ranges).
 
 The most common repair requirements are for proactive replace, and reactive replace: testing these processes under load prior to production deployment of Riak is recommended.
 
-### Proactive Replace
+### Proactive Replacement
 
 It is possible to proactively replace a node in a Riak cluster, for example if:
 
@@ -50,7 +52,7 @@ During the replace operation the replacement node should have `participate_in_co
 
 After completing a proactive replace operation, it may be necessary to realign node naming with design documents or monitoring systems; to rename a replacement node with the name of the node it replaced.  Once the replace operation is complete, it is possible to rename a node while it is down using `reip_manual` - see `riak admin reip_manual --help`.  The ring_directory is normally named `ring` in the platform data directory.  It will contain files such as `riak_core_ring.default.20221122164111`, where the middle term between the periods (in this case `default`) represents the required cluster name.
 
-### Reactive Replace
+### Reactive Replacement
 
 If a node temporarily fails, then recovers without a loss of historic delta; the node will automatically rejoin the cluster and have any delta in data patched via anti-entropy mechanisms, without the need for operator intervention.
 
@@ -98,6 +100,14 @@ To improve the performance of repair, the `repair_span` configuration in the [ri
 The combination of `repair_span = double_pair, repair_deferred = enabled` is significantly more effective when repairing under load.  With these configuration options, it should be noted that repairs will happen in key order, not in reverse order of receipt (the default).  With these changes, using the leveled backend, non-functional testing demonstrates that repairs can complete efficiently even when nodes are persistently at 100% CPU utilisation due to the handling of application requests.
 
 Repair uses handoffs, and so can be tracked as with other cluster change operations.  Once handoffs are complete, Tictac AAE should be re-enabled, e.g. by using `riak_client:tictacaae_resume_node().`.  Once Tictac AAE confirms all vnodes are in-sync - then `participate_in_coverage` can be re-enabled.
+
+### Rolling Replacement
+
+> TODO
+
+### Rolling restart
+
+> TODO
 
 ### Repair an individual leveled store
 
