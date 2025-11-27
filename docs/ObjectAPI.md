@@ -277,7 +277,7 @@ Within the object API load distribution is first based on consistent hashing (to
 
 The Object API is designed to be the most efficient of all the Riak APIs; it is assumed that requests to the Object API will occur with at least an order of magnitude of frequency greater than requests to other APIs.
 
-> The primary target of Riak is not to minimise response times in normal conditions, but to provide for predictable response times in extreme conditions with resource contention, device failure and device recovery.
+> The primary target of Riak is not to minimise response times in normal conditions, but to provide predictable response times in extreme conditions with resource contention, device failure and device recovery.
 
 In summary, the performance targets for the Object API are:
 

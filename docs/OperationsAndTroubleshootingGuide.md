@@ -20,15 +20,17 @@ The following sections provide guidance when operating or troubleshooting a Riak
 
 There are several potential repair and recovery processes for handling different scenarios:
 
-- [Proactive replacement](#proactive-replacement);
-- [Reactive replacement](#reactive-replacement);
-- Rolling replacement
-- Rolling restart
-- [Leveled backend repair](#repair-an-individual-leveled-store);
-- [Repairing a single vnode](#repair-an-individual-vnode);
-- [Repairing a key range](#repair-key-ranges).
+- [Proactive replacement](#proactive-replacement)
+- [Reactive replacement](#reactive-replacement)
+- [Rolling replacement](#rolling-replacement)
+- [Rolling restart](#rolling-restart)
+- [Leveled backend repair](#repair-an-individual-leveled-store)
+- [Repairing a single vnode](#repair-an-individual-vnode)
+- [Repairing a key range](#repair-key-ranges)
 
 The most common repair requirements are for proactive replace, and reactive replace: testing these processes under load prior to production deployment of Riak is recommended.
+
+> All repair and replace operations are designed to be conducted under load.  In non-functional testing of Riak 3.4, an 8-node cluster is saturated with load (both Object API and Query API requests) to 100% CPU utilisation; and then a node is killed, cleared, re-joined and repaired under that load - with the target of never losing more 1/8th of the throughput.
 
 ### Proactive Replacement
 
@@ -60,7 +62,7 @@ If a node temporarily fails, then recovers without a loss of historic delta; the
 
 If a node has failed following an incident, and all data on the node is lost, the cluster can still be recovered back to its previous state without requiring a backup of the failed node.
 
-Recovery of such a lost node requires a reactive replace.  There are three stages to replace and recover the node:
+Recovery of such a lost node requires a reactive replacement.  There are three stages to replace and recover the node:
 
 - [ensuring the node is downed](#administratively-downing-a-node);
 - [forcing the replace](#forcing-a-replace);
@@ -72,7 +74,7 @@ A node that is down, should not have a negative impact on the cluster.  There ma
 
 The status of all nodes in the cluster, from the perspective of another node can be gained by running:
 
-```bash
+```console
 riak admin cluster status
 ```
 
@@ -82,13 +84,13 @@ If a node is known to be not operational, it should be marked as down using `ria
 
 #### Forcing a Replace
 
-When replacing a failed node, the situation differs depending on whether the new node is to be given the same IP address as the replaced node.  If the new (replacement) node has been built with the same address and naming it can be re-joined by re-staging a join, planning the change and committing it (which should lead to no actual transfers).  If the new node has differing configuration, then the plan will require a `join` and a `force_replace` operation to be staged.
+When replacing a failed node, the situation differs depending on whether the new node is to be given the same IP address as the replaced node.  If the new (replacement) node has been built with the same address and naming it can be re-joined by re-staging a join, planning the change and committing it (which should lead to no actual transfers).  If the new node has a different configuration, then the plan will require a `join` and a `force_replace` operation to be staged.
 
 If `force_replace` has been used, then the replacement node can be renamed at a later date using `riak admin reip_manual`.
 
 The new node should be started with `participate_in_coverage` disabled, as it will at this stage be a full member of the cluster but have no data.  It is also more efficient to suspend anti-entropy until the repair is complete.
 
-```bash
+```console
 riak eval "riak_client:tictacaae_suspend_node()."
 riak eval "riak_client:remove_node_from_coverage()."
 ```
@@ -105,11 +107,19 @@ Repair uses handoffs, and so can be tracked as with other cluster change operati
 
 ### Rolling Replacement
 
-> TODO
+A rolling replacement is an extension of the [proactive replacement](#proactive-replacement) process.  In a rolling replacement, a group of new nodes are installed.  There is then a rolling process where some nodes are proactively replaced by the new nodes; and once those replaced nodes are free - they are use to proactively replace other nodes in the cluster.
+
+A proactive replacement should normally be done with a single node (i.e. a group of one), if location awareness is not configured.  If locations are enabled, then multiple nodes within each location can be safely subject to proactive replacement in the same cluster plan.  With location awareness the group of nodes used can be up to the minimum number of nodes within a location.
+
+The same process can be followed for changing hardware in a cluster, except that the replacements are always made to new hardware (or cloud instance types) rather than recovered nodes.
 
 ### Rolling restart
 
-> TODO
+A rolling restart may be required for some configuration changes, or as part of a Riak upgrade.  A stop and start of Riak will involve handoffs, just as with replacements.  The volume of data in those handoffs is minimal, just deltas received during the process - but it is important to wait for both the triggering and completion of handoffs before commencing the next batch of restart actions.
+
+The configuration of locations may speed rolling restarts, as all nodes in a location can be safely stopped and started concurrently.
+
+> Caution is required when performing a rolling restart when using the memory backend, as the pre-existing data is not transferred during the restart and is lost by the restart.
 
 ### Repair an individual leveled store
 
@@ -133,7 +143,7 @@ Where such corruption is limited to a leveled ledger, then [a repair via leveled
 
 The process to [complete a full node repair](#completing-a-repair) can be targeted at an individual vnode to repair just that vnode.  To prompt the repair of an individual vnode, the partition number - the [integer identifier of a vnode](/docs/RiakTheoryGuide.md#the-ring---the-distribution-of-vnodes) - must be passed to the vnode repair function.  The vnode repair function (`riak_kv_vnode_repair/1`) can be called by using the [`remote_console`](#remote-console) or directly from the command line through the `riak eval` CLI call:
 
-```bash
+```console
 riak eval "riak_kv_vnode:repair(<partition_number>)."
 ```
 
@@ -151,7 +161,25 @@ Repair key range operations are a potentially efficient method for repairing key
 
 ## Upgrading a node
 
-> TODO
+Riak upgrades are all designed to support in-place rolling upgrades across the cluster - a [rolling restart](#rolling-restart) with a package deployment between the stop and start.  
+
+The following upgrade path has been specifically tested:
+
+2.2.3 -> 2.2.5 -> 2.9.n -> 3.0.n -> 3.2.n -> 3.4.n
+
+More direct upgrade paths skipping steps may be possible.  New features are added using either a negotiation of capability within the cluster, or with the feature disabled by default in configuration.  Once a capability is mature, after at least two steps in the path, the negotiation may be retired and replaced with a static assumption of capability.
+
+> When using the eleveldb backend  with `snappy` compression (which is the default compression method when eleveldb is used in multi-backend setups), there are potentially multiple broken upgrade paths, even with minor release changes.  Double-check the release notes for issues before progressing with an update, and specific pre-live testing of any upgrade path is essential when using `snappy` compression.
+
+It is not possible via rolling restart to upgrade from an OTP version 22 or prior, to an upgrade with an OTP version of 25 or higher.  For example, direct upgrades from 3.0.n to 3.4.n are not supported unless 3.0.n is built with OTP 22, and 3.4.n is built with OTP 24.
+
+It is recommended to test all upgrades in pre-production environments.  If no pre-production environment is available, then a pilot node should be upgraded first in the cluster for an agreed time period (e.g. 24 hours).  If there are issues with the upgrade, then the pilot node can be stopped, cleared and [repaired](#reactive-replacement).  Most large-scale production users of Riak rely on pre-production testing or pilot nodes to assure changes, and do not depend on a [backup/restore safety net](#backup-options) during a rolling upgrade.
+
+If local changes have been made to `riak.conf`, the package manager should leave the `riak.conf` file unchanged during an upgrade.  A release change may alter a default value in configuration, and if that default value was originally added to the `riak.conf` uncommented - the new default will not take effect following the upgrade, as the `riak.conf` is not altered.
+
+> In configuration management of `riak.conf` files, the potential issue of changing defaults needs to be accounted for i.e. ensure the managed version of `riak.conf` is seeded with a new default `riak.conf` file produced for each release, before context-specific changes are applied.
+
+As with other rolling operations, the operations can be accelerated through the use of locations, by changing a location per-cycle not just a node per-cycle.  Awaiting both the triggering and completion of handoffs between cycles is required for a smooth transition.
 
 ## Remote Console
 
@@ -193,7 +221,7 @@ If an active remote_console session is detached in an unexpected way e.g. due to
 
 All single commands run from riak remote_console should be scriptable from the command line using `riak eval`:
 
-```bash
+```console
 riak eval "riak_client:repair_node()."
 ```
 
@@ -264,7 +292,28 @@ The stats represent the statistics on the node from which they were requested.  
 
 ### Logging and monitoring of read repairs
 
-> TODO
+Read repairs will be invoked directly when a user GET request reveals an out-of-date or missing object within the preflist
+
+> Although GETs will by default respond to the client on quorum responses, all GET processes continue to all responses have returned or timed out.  The read repair is then triggered if required, based on all responses ot just the quorum.
+
+Each read repair, will update the `read_repairs` and `read_repairs_total` statistic available [via riak stats](#riak-stats).  Other stats updates are also made:
+
+- `read_repairs_fallback_notfound`;
+- `read_repairs_fallback_outofdate`;
+- `read_repairs_primary_notfound`;
+- `read_repairs_primary_outofdate`.
+
+These stats indicate whether the vnode in need of repair was a primary or fallback, and whether it has been repaired as it had an out of date object, or the object was not found in that vnode.
+
+During a node failure, `n_val` fallback vnodes will be started for every unavailable primary vnode.  As the fallback vnodes start empty, a large number of read repairs may be immediately triggered, assuming the cluster is subject to application read requests.  This will in the short term impact performance, and in the long term impact handoff times when the node recovers - but in the medium term it will mean that the vnode has frequently accessed data to contribute to quorum.  The [`read_repair_primaryonly` configuration option](/docs/InstallAndStartGuide.md#configuration-of-riak---key-riakconf-changes) can be enabled to stop repairing fallback vnodes through read repair.
+
+Read repairs are also invoked by active anti-entropy.  When an intra-cluster AAE process detects a delta, it does not prompt it directly, it instead will prompt a GET request so that read repair will happen indirectly.
+
+If a repair has been prompted by a Tictac AAE anti-entropy exchange, setting the environment variable `riak_kv` `log_readrepair` to `true` will prompt the details of the Keys and compared Clocks to be logged for every repair.  This may be useful in trying to determine the root cause of discrepancies.
+
+```console
+riak eval "application:set_env(riak_kv, log_readrepair, true)"
+```
 
 ### Monitoring inter-cluster reconciliation
 
@@ -307,14 +356,14 @@ The bitcask backend operates at PUT time as an append-only database.  As bitcask
 
 If objects change; they are updated, deleted or they expire due to TTL - then bitcask must perform infrequent `merge` operations to update files so that replaced objects no longer consume space on disk.  Bitcask does not orchestrate merge operations so that they do not coincide, and the merge operations may have a significant impact on cluster performance when they are initiated.
 
-If storing mutable objects in Bitcask, then it is important to configure merge windows, windows in which merges are permitted to take place such that either:
+If storing mutable objects in bitcask, then it is important to configure merge windows, windows in which merges are permitted to take place such that either:
 
 - merges take place at different times on different nodes (or locations) so that only a single replica for each partition is impacted by a concurrent merge;
 - merges take place outside of peak hours of database usage.
 
 When testing the potential throughput of a bitcask-backed Riak database it is important to test with appropriate levels of mutation, and a realistic configuration of the bitcask merge window.
 
-For information on configuring bitcask merge see the `bitbask.merge` sections [within the bitcask schema file](https://github.com/OpenRiak/bitcask/blob/openriak-3.2/priv/bitcask.schema). 
+For information on configuring bitcask merge see the `bitbask.merge` sections [within the bitcask schema file](https://github.com/OpenRiak/bitcask/blob/openriak-3.2/priv/bitcask.schema).
 
 ### leveled compaction high/low hour
 

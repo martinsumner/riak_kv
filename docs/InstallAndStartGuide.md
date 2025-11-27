@@ -125,6 +125,8 @@ When starting a first cluster to experiment, the following configuration items a
 - `platform_data_dir`; where the actual data will be stored, must be a space with sufficient capacity and throughput.
 - `listener.http.internal` or `listener.pb.internal`; the IP address and port for accessing the API. It is recommended to bind this IP address to a specific interface address.  [The Query API](/docs/QueryAPI.md) requires use of the `http` listener, and performance will differ between the `pb` and `http` transports when using [the Object API](/docs/ObjectAPI.md).
 
+In a `riak.conf` file, the last setting of any configuration item is the actual value used in the configuration.  Edits to the riak.conf file don't have to change the configuration in place, defaults may be overwritten by concatenating changes to the end of the file.
+
 ### Configuration of Riak - leveled backend
 
 There are a number of configurable options within the leveled backend, that can be changed within `riak.conf`.  For a comprehensive view, [refer to the leveled schema file](https://github.com/OpenRiak/leveled/blob/openriak-3.4/priv/leveled.schema).
