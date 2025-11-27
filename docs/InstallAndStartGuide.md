@@ -2,7 +2,7 @@
 
 ## Installation
 
-Riak is built on the Erlang/OTP platform.  Only the even numbered major versions of Erlang/OTP are fully tested for operating Riak.  For each major version of Riak, the major version is initially released supporting two major OTP versions, where the lower version is common with the previous Riak major release.  Once a Riak major release has been in production for 12 months, future minor release may only support the higher of the two Erlang/OTP versions.
+Riak is built on the Erlang/OTP platform.  Only the even numbered major versions of Erlang/OTP are fully tested for operating Riak.  For each major version of Riak, the major version is initially released supporting two major OTP versions, where the lower version is common with the previous Riak major release.  Once a Riak major release has been in production for 12 months, future minor releases may only support the higher of the two Erlang/OTP versions.
 
 The mappings for current and planned releases are:
 
@@ -33,12 +33,12 @@ Some points to note when installing Erlang:
 - The OpenSSL 3.0 integration in OTP 24 is not currently considered to be production-ready and stable.
 - If using Riak KV 3.0.16 and OTP 22.3, Riak does not support Erlang/OTP running in [HIPE mode](https://www.erlang.org/docs/22/man/hipe_app).  HIPE is retired as of OTP 24.
 - There are significant performance advantages in running Riak on OTP 26, when compared with OTP 24.3.
-- The Erlang/OTP team only commit to fix issues in the three most recent major versions of Erlang.  Although Erlang 24.3 is mature and very stable, migrating forward to a Riak release running on a presently supported Erlang version is recommended.
+- The Erlang/OTP team are only committed to fixing issues in the three most recent major versions of Erlang.  Although Erlang 24.3 is mature and very stable, migrating forward to a Riak release running on a presently supported Erlang version is recommended.
 - It is not possible to migrate directly (using a rolling restart) from Riak KV 3.0 to Riak KV 3.4 due to breaking changes in the Erlang distribution protocol.  Migrating directly between these versions with zero down-time can only be managed using a cluster migration strategy with Riak `nextgenrepl`.
 
 ### Download Riak
 
-Riak is available at to clone at https://github.com/OpenRiak/riak.
+Riak is available to clone at https://github.com/OpenRiak/riak.
 
 Each major release has an associated branch which represents current development activity.  For Riak 3.2 this is `openriak-3.2`, For Riak 3.4 this is `openriak-3.4`.  Building from these branches may contain unreleased changes.
 
@@ -98,7 +98,7 @@ Starting Riak may require a higher `ulimit` to be set within the shell - a limit
 
 Almost all configuration of Riak can be done through the `etc/riak.conf` file.  Each public configuration option should be described in that file, but there are additional `hidden` options supported for expert-advised changes.  The `riak.conf` file is built from individual schema files, and the repositories which contribute towards those schema files are listed in [the `cuttlfish` section of the `riak/rebar.config` file](https://github.com/OpenRiak/riak/blob/fd27c6933391ece65b31760cccb87b671a80f310/rebar.config#L23-L37).
 
-Each individual schema component cna be found in the `priv` folder for that repository, e.g [priv/riak_kv.schema for the riak_kv schema](https://github.com/OpenRiak/riak_kv/blob/openriak-3.4/priv/riak_kv.schema).
+Each individual schema component can be found in the `priv` folder for that repository, e.g [priv/riak_kv.schema for the riak_kv schema](https://github.com/OpenRiak/riak_kv/blob/openriak-3.4/priv/riak_kv.schema).
 
 When starting a first cluster to experiment, the following configuration items are of particular importance:
 
@@ -117,18 +117,22 @@ When starting a first cluster to experiment, the following configuration items a
 
 There are a number of configurable options within the leveled backend, that can be changed within `riak.conf`.  For a comprehensive view, [refer to the leveled schema file](https://github.com/OpenRiak/leveled/blob/openriak-3.4/priv/leveled.schema).
 
-Configuration items of notable importance are:
+Compression, decompression and compaction have a potentially significant impact on performance within leveled,  and so configuration items of notable importance are:
 
-- `leveled.compression_method`; should be set to zstd, unless objects are sent to Riak compressed, in which case configure as `none`.
-  - in testing `zstd` is by far the most efficient choice.
+- `leveled.compression_method`; should be set to zstd, unless objects are sent to Riak compressed, in which case the compression method should be configured as `none`.
+  - in testing `zstd` has been demonstrated to be the most efficient available option (when compared to `native` which uses zlib compression, or `lz4`).
 - `leveled.ledger_compression`; if `compression_method` is set to `none`, then compression should still be enabled here e.g. set to `zstd`.
-  - it is strongly recommended to use some form of compression on the ledger, even when all values are pre-compressed.
+  - the ledger does not store object values, but stores the object keys and metadata in blocks by key order.
+  - it is recommended to use some form of compression on the ledger, even when all values are pre-compressed.  The ledger blocks are generally highly compressible, even when the values are not. 
 - `leveled.compaction_runs_perday`; refer to the [operations guide](/docs/OperationsAndTroubleshootingGuide.md#leveled-compaction-highlow-hour) for more on leveled compaction.
-- `leveled.log_level`; leveled logs are verbose, but useful for monitoring as well as troubleshooting, so careful consideration is required before moving to an alternate log level.
+
+The leveled logs are relatively verbose, when compared to log activity across Riak as a whole.  These logs can be tuned using:
+
+- `leveled.log_level`; the info-level logs are useful for monitoring as well as troubleshooting, so careful consideration is required before moving to an alternate log level.
 
 ### Configuration of Riak - bitcask backend
 
-There are a number of configurable options within the leveled backend, that can be changed within `riak.conf`.  For a comprehensive view, [refer to the bitcask schema file](https://github.com/OpenRiak/bitcask/blob/openriak-3.4/priv/bitcask.schema).
+There are a number of configurable options within the bitcask backend, that can be changed within `riak.conf`.  For a comprehensive view, [refer to the bitcask schema file](https://github.com/OpenRiak/bitcask/blob/openriak-3.4/priv/bitcask.schema).
 
 Configuration items of notable importance are:
 
@@ -158,7 +162,7 @@ A number of "defaults" for bucket properties are configurable via `riak.conf` e.
 
 Configuring these defaults will impact only non-typed buckets.  So any bucket name used where no type is specified will inherit these defaults, but any typed bucket created will NOT inherit these configured defaults - typed buckets instead have fixed, pre-defined defaults.
 
-Two pre-defined defaults changed with the introduction of typed buckets (the merge strategy aka `dvv_enabled`, and the `allow_mult` configuration), it is strongly recommended to configure your clusters to have the new default properties for non-typed buckets to avoid confusion with non-typed buckets having different defaults i.e. by adding to your `riak.conf`:
+Two pre-defined defaults changed with the introduction of typed buckets (the merge strategy aka `dvv_enabled`, and the `allow_mult` configuration).  Having this delta in behaviour is a common cause of confusion in application developers using Riak, and so it is recommended to configure your clusters to have the same default properties for non-typed buckets as with typed buckets.  This can be achieved by adding to your `riak.conf`:
 
 > buckets.default.merge_strategy = 2
 > buckets.default.allow_mult = true
@@ -170,7 +174,7 @@ In general, setting bespoke bucket properties should be done using typed buckets
 
 Default changes made via riak.conf need to be set consistently across a cluster.  No bucket properties are gossipped between clusters, so properties are cluster-specific.  In general any cluster setting related to vector clocks MUST be configured consistently across replicating clusters e.g. `dvv_enabled`, `old_vclock`, `young_vclock`, `big_vclock` and `small_vclock`.  Other properties can be different between clusters. 
 
-Some changes can be applied using GET/PUT specific parameters, which will override the default bucket property i.e. a bucket could be configured to use `{sync_on_write, one}` but a specific PUT can override this by setting `{sync_on_write, all}`.  Although the use of GET/PUT specific parameters is supported, it is is not recommended.  Operation-specific parameters that override defaults are not logged, and can considerably increase the operator challenges when troubleshooting intermittent problems.
+Some changes can be applied using GET/PUT specific parameters, which will override the default bucket property i.e. a bucket could be configured to use `{sync_on_write, one}`, but a specific PUT can override this by setting `{sync_on_write, all}`.  Although the use of GET/PUT specific parameters is supported, it is not recommended.  Operation-specific parameters that override defaults are not logged, and can considerably increase the operator challenges when troubleshooting intermittent problems.
 
 #### Property - dvv_enabled
 
@@ -186,7 +190,7 @@ The `allow_mult` bucket property has a default value of `true`, for any typed bu
 
 The internal workings of Riak are identical for the two allow_mult settings, with the exception of the case when an unresolvable conflict is discovered in the object change history.  In this case: if `{allow_mult, true}`, all conflicting versions are returned to the client to resolve (on the next GET); if `{allow_mult, false}` only the object with the most recent last_modified_date is returned.
 
-The last_modified_date is a microsecond-level timestamp, that depends on the accuracy of the local node's clock.  If the timestamps match of conflicting changes, then an arbitrary choice is made, although there is a preference for changes with values over deletions.  When using `{allow_mult, false}`, the use of reliable time sources to co-ordinate time within and across clusters is strongly recommended.   
+The last_modified_date is a timestamp that depends on the accuracy of the clock on the node processing the update.  Time timestamp is recorded to a microsecond level, although it is only visible to an accuracy of one second when read via the HTTP Object API.  If conflicting versions of the same object have the matching timestamps, then an arbitrary choice is made, although there is a preference for changes with values over deletions.  Due to the potential use of timestamps to make comparisons when using `{allow_mult, false}`, the use of reliable time sources to co-ordinate time within and across clusters is recommended.
 
 When using conflict-free replicated data types, `{allow_mult, true}` must always be used.
 
@@ -196,7 +200,7 @@ Unless the non-existence of an object can be guaranteed by the application using
 
 The `last_write_wins` bucket property has a default value of `false`.  It should only ever be changed when the `allow_mult` bucket property is set to `false`.
 
-In general, the default should be used, even when `{allow_mult, false}`.  Setting `{last_write_wins, true}` changes the behaviour on PUT, so that an incoming write is assumed to be superior to an existing write without checking the change history of the existing object.  Internally within Riak, the actual order which PUTs are applied is non-deterministic, and there are many situations (replication, anti-entropy, handoffs) where old PUTs may be received after new PUTs.  In these cases setting `{last_write_wins, true}` may have unexpected consequences
+In general, the default should be used, even when `{allow_mult, false}` is set.  Setting `{last_write_wins, true}` changes the behaviour on PUT so that an incoming write is assumed to be superior to an existing write, without checking the change history of the existing object.  Internally within Riak, the actual order with which PUTs are applied is non-deterministic, and there are many situations (replication, anti-entropy, handoffs) where old PUTs may be received after new PUTs.  In these cases setting `{last_write_wins, true}` may have unexpected consequences
 
 If, and only if, the bitcask backend is used, and objects are being updated and not simply inserted, and there is no use of tictac anti-entropy, then there is a small performance advantage from setting `{last_write_wins, true}`.  For other backends and scenarios there is no performance benefit.
 
@@ -204,7 +208,7 @@ It is recommended that `{last_write_wins, true}` only be used when for once-only
 
 #### Property - n_val
 
-The `n_val` bucket property has a default value of `3`, and can be set to any positive integer: though general only values of `1`, `3` and `5` are in common use.
+The `n_val` bucket property has a default value of `3`, and can be set to any positive integer: though only values of `1`, `3` and `5` are commonly used.
 
 Setting distinct `n_val`s on a per-bucket basis is not recommended, it is preferable to have a consistent `n_val` across a cluster.  This is because:
 
@@ -220,15 +224,15 @@ Changing an n_val on a bucket which already contains data will have unexpected a
 
 The `node_confirms` bucket property has a default value of `0`, and may be set to any non-negative integer less than or equal to the n_val (for that bucket).  The purpose of `node_confirms` is to offer a guarantee that the data is available on multiple machines, for example setting node_confirms to 2 will guarantee that at least two machines have the data - and the risk of the data being lost can be considered accordingly.
 
-the `node_confirms` property was added as an alternative to using the `pr` and `pw` parameters to provide guarantees that distinct nodes were used for storage before confirming reads/writes.  The use of `pw` could both fail to provide the desired guarantee of physical redundancy; but also could prompt false failures in circumstances where the data was still resiliently stored, reducing availability.
+The `node_confirms` property was added as an alternative to using the `pr` and `pw` parameters to provide guarantees that distinct nodes were used for storage before confirming reads/writes.  The use of `pw` could fail to provide the desired guarantee of physical redundancy and also could prompt false failures in circumstances where the data was still resiliently stored, reducing availability.
 
 Note that `node_confirms` is applied on both reads and writes.  The parameter is also applied on reads so that an application can understand on read that a previous put has not yet reached the required level of diversity.
 
 #### Property - sync_on_write
 
-The `sync_on_write` bucket property has a default value of `backend` allows for more flexible guarantees about data being flushed to disk.  By default, Riak backends will confirm a PUT once a file write has been completed, but that write may only be resident in memory in the file-system page cache; so at this stage the data is not safe (for example if a power failure simultaneously killed multiple nodes).  Riak backends can be configured to flush all writes to disk, but this has a significant impact on throughput, both in normal operation (each PUT prompts n_val flushes per cluster) and also when managing transfers between nodes. 
+The `sync_on_write` bucket property has a default value of `backend`, and allows for more flexible guarantees about data being flushed to disk.  By default, Riak backends will confirm a PUT once a file write has been completed, but that write may only be resident in memory in the file-system page cache; so at this stage the data is not safe (for example if a power failure simultaneously killed multiple nodes).  Riak backends can be configured to flush all writes to disk, but this has a significant impact on throughput, both in normal operation (each PUT prompts n_val flushes per cluster) and also when managing transfers between nodes. 
 
-The `sync_on_write` bucket property can be configured to `backend` (default - revert back to original behaviour, and use only the backend setting), `one` or `all`.  It is assumed when using `sync_on_write` the backend will be configured not to flush to disk on every write.  In this case a write to a bucket with `backend` may be resident in memory on all nodes after the PUT is confirmed to the application client.  If `all` is set, all writes that have confirmed will also have been flushed (by default 2 of 3 writes must be confirmed before the client receives a positive response).  If `one` is used, the first location to process the PUT will flush to disk, where other locations are allowed to hold it in memory in the file system page cache.
+The `sync_on_write` bucket property can be configured to `backend` (default - revert back to original behaviour, and use only the backend setting), `one` or `all`.  It is assumed when using `sync_on_write` the backend will be configured not to flush to disk on every write.  In this case a write to a bucket with `backend` may be resident in memory on all nodes after the PUT is confirmed to the application client.  If `all` is set, all writes that have been confirmed will also have been flushed (by default 2 of 3 writes must be confirmed before the client receives a positive response).  If `one` is used, the first location to process the PUT will flush to disk, where other locations are allowed to hold it in memory in the file system page cache.
 
 The `sync_on_write` property is used only for PUTs via the API.  Internal PUTs (e.g. for transfers) will ignore the property and use the backend configuration, and so will not carry the overhead of flushing.
 
@@ -243,13 +247,13 @@ The `aae_tree_exclude` bucket property has a default value of `false` and allows
 The purpose of `aae_tree_exclude` is to not include the bucket in the cached tree, so that the bucket isn't considered in the reconciliation job.  For example, this may help when:
 
 - a subset of buckets are not replicated between clusters;
-- a bucket is using a backend TTL within one of the clusters (a cached tree cannot coordinate changes with backend stores which implement auto-expiry - so cached trees are prompt false AAE workloads when a backend TTL is used).
+- a bucket is using a backend TTL within one of the clusters (a cached tree cannot coordinate changes with backend stores which implement auto-expiry - so cached trees may prompt false AAE workloads when a backend TTL is used).
 
 If a bucket is configured to `{aae_tree_exclude, true}` then the keys in that bucket are not added to the cached tree, and are not considered when running either inter-cluster or intra-cluster anti-entropy reconciliation jobs.  The keys are still visible to aae_folds, and if using parallel-mode tictacaae modification will still impact the parallel mode key store.
 
 The preferred long-term strategy for temporary objects is to use the eraser and reaper processes to garbage collect objects, rather than relying on backend TTL.  However when migrating from a multi-backend store with TTL-based backends, the migration should be easier if: those temporary buckets are excluded from aae trees, are replicated separately using range_repl, and reconciled using bucket-specific aae full-sync jobs.
 
-The `aae_tree_exclude` bucket property may be cached by processes within a cluster, so changing the property will not have immediate.  If changing the property it should be coordinated with a rolling restart.
+The `aae_tree_exclude` bucket property may be cached by processes within a cluster, so changing the property will not have immediate effect.  A change to the `aae_tree_exclude` property should be coordinated with a rolling restart.
 
 #### Property - small_vclock
 
@@ -261,18 +265,15 @@ Other vclock settings - `old_vclock`, `young_vclock`, `big_vclock` - should not 
 
 #### Property - notfound_ok
 
-The `notfound_ok` bucket property has a default value of `true`, and this means when calculating the 'r' value of a read a response from an individual vnode will count as a valid read, and so will count towards quorum being reached.
+The `notfound_ok` bucket property has a default value of `true`, and this means when calculating the `r` value of a read, a response from an individual vnode of `not_found` will count as a valid read, and so will count towards quorum being reached.
 
-There are two circumstances where setting `{notfound_ok, false}` may be used:
-
-- when the application never expects to read keys that are not present, and so not_found is a failure;
-- when specific performance to reduce `r` or `w` values to fast return to clients before operations have reach quorum, that may lead otherwise to near-parallel reads and writes falsely responding `not_found`.  Note that such performance hacks are generally not recommended.
+It is recommended to set `notfound_ok` to `false`, so that a vnode with a missing value will not count towards quorum, especially when the application never expects to read keys that are not present, and so not_found is definitively a failure.  However, if the application purposefuly reads before a write to confirm that an object is not present - then configuring `notfound_ok` to `true` would be preferred.
 
 #### Property - pr and pw
 
 The `pr` and `pw` bucket properties default to `0`, and are used to require primary vnodes to be involved in reads and writes.  This may prevent writing to minority partitions, however when `{n_val, 3}` this will probably lead to intermittent failures when only two nodes fail in a cluster.  As clusters grow the probability of two concurrent failures will increase significantly.
 
-It is strongly recommended to consider using `node_confirms`, `sync_on_write` or token-based conditional PUTs to achieve controls in preference to configuring `pr`/`pw` to values greater than 1.
+Although configuring `pr`/`pw` to values greater than 1 may be used to indirectly set stronger data reliability guarantees, or to adjust consistency guarantees - there are better ways of achieving this in Riak, which have fewer negative side effects.  Consider using [`node_confirms`](#property---node_confirms) or [`sync_on_write`](#property---sync_on_write) to manage data reliability.  The use or [token-based conditional PUTs](/docs/ObjectAPI.md#conditional-requests) is the preferred approach, rather than `pr`/`pw` adjustments for tuning consistency.
 
 It is normally best practice to configure either `{pr, 1}` or `{notfound_ok, false}`, rather than rely on defaults.  Otherwise there is a potential issue when at least two nodes have failed and for some objects 2 of the 3 vnodes are unpopulated fallbacks.  In this case, without changing defaults, the two unpopulated fallback vnodes can return `not_found` and the GET request can achieve quorum and return a false not_found to the client.  By configuring either `{pr, 1}` or `{notfound_ok, false}`, when there is only one populated/primary vnode, the GET request must wait for this vnode to respond.
 
@@ -284,4 +285,6 @@ If using the mutli-backend, the bucket property `backend` can be used to map buc
 
 #### Property - General read/write parameters
 
-There are a number of configurable read/write parameters - `r`, `w`, `dw`, `rw`, `basic_quorum`, `sloppy_quorum`.  It is strongly recommended to stick to default quorum settings.  Any attempt to re-configure to improve speed of response to clients, will increase the risk of overloading vnode mailboxes and causing unnecessary failures.
+There are a number of configurable read/write parameters - `r`, `w`, `dw`, `rw`, `basic_quorum`, `sloppy_quorum`.  In general, read and write parameters default to quorum, and maintaining this default is preferred.  Any attempt to re-configure to improve speed of response to clients, will increase the risk of overloading vnode mailboxes and causing unnecessary failures.
+
+There may be rare circumstances where a cluster is repeatedly suffering `vnode mailbox overload` error responses, because individual vnodes are developing backlog queues larger than their peers in the preflist.  Setting `r` and `w` values to the configured `n_val` can be used as a workaround to temporarily alleviate these scenarios, by slowing the application down to the pace of the slowest vnode.  However, in the long term, the root cause of these deltas between vnode busyness should be addressed.
