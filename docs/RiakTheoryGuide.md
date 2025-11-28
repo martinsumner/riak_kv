@@ -11,9 +11,9 @@ This guide is a work in progress, and provides insight into the underlying theor
 
 Riak is a set of smaller databases which are distributed across physical nodes.  The smaller databases are termed vnodes, and the vnode is a set of functions that are controlling a database backend - where the backend (either leveled or bitcask) does the work to modify and fetch serialised data from disk.
 
-The number of vnodes is the ring size, which must be a factor of 2.  It is desirable for the ring size  to be much greater than the number of nodes (i.e. actual devices).  The ring size must be a factor of 2, because each key will be hashed to a given position in the ring, by taking a sha hash of the Bucket and Key, and using an equivalent function to: `Hash band (RingSize - 1)`.  This will give each key a position between `0` and `RingSize - 1`, i.e. zero-indexed position in the vnodes.
+The number of vnodes is the ring size, which must be a factor of 2.  It is desirable for the ring size to be much greater than the number of nodes (i.e. actual devices).  The ring size must be a factor of 2, because each key will be hashed to a given position in the ring, by taking a sha hash of the Bucket and Key, and using an equivalent function to: `Hash band (RingSize - 1)`.  This will give each key a position between `0` and `RingSize - 1`, i.e. zero-indexed position in the vnodes.
 
-As the object should be stored in multiple places, normally 3 (which is our `n_val`).  An object is then mapped to the Position, and the `(Position + 1) mod RingSize` and `(Position + 2) mod RingSize`.  This position triple is called the preflist, or the set of primary vnodes for the key.
+As the object should be stored in multiple places, normally 3 (which is the `n_val`).  An object is then mapped to the Position, and the `(Position + 1) mod RingSize` and `(Position + 2) mod RingSize`.  This position triple is called the preflist, or the set of primary vnodes for the key.
 
 When a cluster is formed, a claim algorithm will distribute vnodes `0` to `RingSize - 1` around the physical nodes, so that all of these preflists fall onto 3 separate nodes, but also ensures that for every such position `(Position + 3) mod RingSize` is also on a diverse physical node to the preflist for that position.
 
@@ -41,13 +41,15 @@ Riak is designed to be eventually consistent, in that it is:
   - but also because it is continuously reconciled, with background process that efficiently analyse the overall system for discrepancies and proactively heal those deltas without operator intervention,
   - where that continuous reconciliation occurs both within and between clusters.
 
-It should be noted that Riak offers the same guarantees of zero-intervention eventual-consistency for both multi-cluster environments as well as single cluster environments.  However, within a cluster it is possible to enforce conditions on writes to make Riak less permissive, but less likely to result in conflict (e.g. conditional PUTs with token-based consensus).
-
-In databases in general, not being eventually consistent increases the operational processes required to ensure data integrity is maintained: e.g. static failovers between primary and standby clusters, intervention to recover from replication failures between regions.  The gain in operational simplicity and reduced operational intervention, is a trade-off against the developer overhead of considering conflict.
+It should be noted that Riak offers the same guarantees of zero-intervention eventual-consistency for both multi-cluster environments as well as single cluster environments.  However, within a cluster it is possible to enforce conditions on writes to make Riak less permissive, but less likely to result in conflict e.g. through the use of [conditional PUTs with token-based consensus](/docs/ObjectAPI.md#conditional-requests).
 
 Care may be taken by the Riak user to avoid conflict; but inevitably there will be some object values that eventually end-up in conflict.  When in a conflicted state, an object may have two values where the database cannot determine which is the most current, often as updates were made concurrently by two different application instances.
 
-> Handling an object where the value is in doubt, adds cognitive load to the application developer - it is the key trade-off between the operator and the developer to accept when adopting Riak.  It is possible to craft objects whereby the situation can always be resolved, known as conflict-free replicated data-types.  However, designing a system based only on those data types is another type of cognitive load for the application developer.
+Not being eventually consistent in a database, is likely to increase the operational processes required during failure scenarios: e.g. static failovers between primary and standby clusters, intervention to recover from replication failures between regions.  With eventual consistency: the gain in operational simplicity and reduced operational intervention, is a trade-off against the developer overhead of considering conflict.
+
+> Handling an object where the value is in doubt, adds cognitive load to the application developer - it is the key trade-off between the operator and the developer to accept when adopting Riak.  At small-scale, and when downtime is acceptable; it is almost always preferable to favour the application developer in the trade-off.  Riak is an answer to exceptional use cases with demanding non-functional requirements, not a general purpose data-storage solution.
+
+It is possible to craft objects whereby the situation can always be resolved, known as conflict-free replicated data-types.  However, designing a system based only on those data types is another type of cognitive load for the application developer.
 
 In general, most applications that depend on Riak evolve strategies to restrict and manage conflict scenarios:
 
@@ -59,11 +61,13 @@ In general, most applications that depend on Riak evolve strategies to restrict 
 
 ### Quorum on Read, Write and Query
 
-The default GET and PUT options are based on validating quorum within the cluster before returning a response to the client.  Quorum meaning that a majority of vnodes within a preflist must have provided acknowledged input to the transaction.  So although Riak offers a guarantee that data will be eventually consistent, within a single, stable cluster results will generally be immediately consistent.  A read that follows a write will see the most up-to-date value, as a read must consult a majority of vnodes, and a write must update a majority of vnodes for that key.
+The default GET and PUT options are based on validating quorum within the cluster before returning a response to the client.  Quorum meaning that a majority of vnodes within a preflist must have provided acknowledged input to the transaction.  So although Riak offers a guarantee that data will be eventually consistent; within a single, stable cluster an application will still [read its own writes](https://jepsen.io/consistency/models/read-your-writes).  There are tunable consistency [properties in Riak](/docs/InstallAndStartGuide.md#configuration-of-riak---bucket-properties), that can be used to extend this guarantee to clusters during individual node failures.
 
-Quorum is the default for [the Object API](/docs/ObjectAPI.md), but not the default for [the Query API](/docs/QueryAPI.md).
+> Quorum is the default for [the Object API](/docs/ObjectAPI.md), but not the default for [the Query API](/docs/QueryAPI.md).
 
-All index updates within a vnode are transactional to the object change; so Riak is different to some other distributed databases in that queries in a single, stable cluster will generally immediately reflect the latest update.  There is no post-update delay for indices to be updated. However queries have to be distributed across a covering set of primary vnodes, and this covering set will include a single replica of each object.  If a primary vnode is active but not up-to-date (i.e. due to a recent recovery from failure or corruption), query results are not validated by checking results between replicas.  This can be partially mitigated by relying on operator intervention during recovery (using the  `participate_in_coverage` setting to block a recovering node from participating in queries).
+All index updates within a vnode are transactional to the object change; so that in a single, stable cluster, queries will immediately reflect the latest update.  There is no post-update delay for indices to be updated. However queries have to be distributed across a covering set of primary vnodes, and this covering set will include a single replica of each object.  If a primary vnode is active but not up-to-date (i.e. due to a recent recovery from failure or corruption), query results are not validated by checking results between replicas.
+
+The issue of missing data in coverage queries during the recovery process, can be mitigated by relying on operator intervention, using the `participate_in_coverage` setting to block a recovering node from participating in queries.
 
 It is possible to use inverted indexes for queries within Riak, so that queries can also use quorum reads.  However, using inverted indexes in Riak 3.4 requires management from within the application, not the database.
 
@@ -78,7 +82,7 @@ A dotted version vector has two parts:
 - A list of actors, and count of changes which have been coordinated by that actor (a per-actor sequence number);
 - A dot attached to each content value, where the dot is the actor and actor-specific sequence number with which that change was introduced.
 
-If there are two objects, one can be considered to be dominant (or more advanced) if within the version vector all the sequence numbers on all the actors are either equal to, or greater than, those on the other object (and at least one is greater than).  An update being dominant within the version vectors allows it to be updated in the backend without a comparison and merge between the objects.
+If there are two objects, one can be considered to be dominant (or more advanced) if within the version vector all the sequence numbers on all the actors are either equal to, or greater than, those on the other object (and at least one is greater than).  An update being dominant within the version vectors allows it to be updated in the backend without the need for a comparison and merge between the objects.
 
 If there are two versions of an object, and neither version vector is dominant, then their contents are potentially siblings: the causal consistency cannot determine which is the more advanced value.  However, it may be possible to determine from the "dot" on a given value that the conflict is unrelated to that particular value, because either:
 
@@ -103,26 +107,30 @@ Riak has a number of background processes:
 
 ### Anti-Entropy
 
-Riak tracks the current state of the Version Vectors across all the key space to perform anti-entropy, to recover an object to its most up-to-date value if a vnode has a stale or missing entry.  Anti-entropy can be used both within and between clusters, using special cached and mergeable merkle trees; these trees allow entropy to be tracked across large key spaces highly efficiently.  There are also a number of other mechanisms that repair in reaction to the detection of failure (read repair), or in update vnodes following cluster changes (handoff for both repair, cluster change and recovery of fallbacks).
+Riak tracks the current state of the Version Vectors across the whole key-space to perform anti-entropy, to recover an object to its most up-to-date value if a vnode has a stale or missing entry.  Anti-entropy can be used both within and between clusters, using special cached and mergeable merkle trees; these trees allow entropy to be tracked across large key-spaces highly efficiently.
 
-The active anti-entropy process is designed to be highly efficient, and very quick, when confirming no deltas exist.  The work to discover and repair deltas is relatively expensive - but is throttled in default configuration to avoid overloading the database.  As there are other anti-entropy mechanisms (e.g. quorum reads with read repair); slow repair is preferred to high repair-related resource utilisation.
+Anti-entropy is in addition to other mechanisms that repair in reaction to the detection of failure (read repair), or in update vnodes following cluster changes (handoff for both repair, cluster change and recovery of fallbacks).
 
-The anti-entropy trees have 1,024 branches, and each branch has 1,024 leaves.  Each key in the store is mapped by a hash algorithm into a given leaf.  The hash value of that leaf is calculated by taking a hash of the Key and version vector combined - and then performing an `xor` operation on all the hashes within that leaf.  The hash value for each branch is the hash of each leaf in the branch combined using `xor`.
+> The active anti-entropy process is designed to be highly efficient, and very quick, when confirming no deltas exist; o(10s) to confirm alignment between o(10bn) objects.
 
-Each vnode has a cached tree for each preflist the vnode supports (with a single `n_val` in the cluster there will be `n_val` preflists in each vnode, and hence `n_val` cached trees). The cached tree represents the state for the whole preflist on the vnode.  When an object is modified, then the object key and the both the previous and current version vector is sent to the `aae_controller` for the vnode; which will update the correct preflist's tree cache, using a double xor operation (in effect one to remove the previous hash, and one to add the new hash).
+The work to compare between stores has a low resource cost.  The work to discover and repair deltas is relatively expensive, but is throttled in default configuration to avoid overloading the database.  As there are other anti-entropy mechanisms (e.g. quorum reads with read repair); slow repair is preferred to high repair-related resource utilisation.
+
+The anti-entropy trees have 1,024 branches, and each branch has 1,024 leaves.  Each key in the store is mapped by a hash algorithm into a given leaf.  The hash value of that leaf is calculated by taking a hash of the Key and version vector combined, and then performing an `xor` operation on all the hashes within that leaf.  The hash value for each branch is the hash of each leaf in the branch combined using `xor`.
+
+Each vnode has a cached tree for each preflist the vnode supports (with a single `n_val` in the cluster there will be `n_val` preflists in each vnode, and hence `n_val` cached trees per vnode). The cached tree represents the state for the whole preflist on the vnode.  When an object is modified, then the object key and the both the previous and current version vector is sent to the `aae_controller` for the vnode; which will update the correct preflist's tree cache, using a double xor operation.  In effect one xor to remove the previous hash, and one xor to add the new hash).
 
 The intra-cluster anti-entropy can then compare the preflist tree for one vnode, with the preflist tree of another vnode within the same preflist, to confirm if the vnode's are in-sync for that preflist.  To make that comparison, only the 1,024 hashes (4KB) of the branches are compared.  If there is a delta, then the same branch comparison will be run in a slow loop - checking for deltas which are constant across the loops.  If the loop stabilises on a non-zero number of deltas, then the 1,024 leaves in those branches are compared in a loop to find a constant delta.  If there is no constant delta, the trees are considered in sync (i.e. any discovered delta was a matter of timing).
 
-If a set of leaves is discovered to be out-of-sync, then there must be a comparison between the objects to discover which objects need repair.  To compare the objects between vnodes, only the Version Vectors need to be compared.  To find the Keys and Version Vectors for a set of leaves, a fold over the whole key_store (either native or parallel) is required - however that fold is passed the segment IDs (an integer identifier for the leaves), and the store has in-built hints to filter out blocks of keys that do not contain segment IDs of interest.  This means the cost of finding Keys and Version Vectors is significant, but mitigated by the segment ID acceleration.
+If a set of leaves is discovered to be out-of-sync, then there must be a comparison between the objects in those leaves to discover which objects need repair.  To compare the objects between vnodes, only the Version Vectors need to be compared.  To find the Keys and Version Vectors for a set of leaves, a fold over the whole keystore (either native or parallel) is required - however that fold is passed the segment IDs (an integer identifier for the leaves), and the store has in-built hints to filter out blocks of keys that do not contain segment IDs of interest.  This means the cost of finding Keys and Version Vectors is significant, but mitigated by the segment ID acceleration.
 
-To limit the volume of data to be compared, and improve the performance of searches for Keys and Version Vectors, the number of segment results to be compared as a result of any exchange is limited.  All anti-entropy processes will also try and gather information from previous delta discoveries to intelligently reduce the scope of future discoveries - i.e. by looking at the modified date range in which differences fall, or if they are limited to specific buckets.  With information from previous deltas, the cost of finding more deltas can be reduced.
+To limit the volume of data to be compared, and improve the performance of searches for Keys and Version Vectors, the number of segment results to be compared as a result of any exchange is limited.  All anti-entropy processes will also try and gather information from previous delta discoveries to intelligently reduce the scope of future discoveries.  For example, by looking at the modified date range in which differences fall, or if they are limited to specific buckets.  With information from previous deltas, the cost of finding more deltas can be reduced.
 
 There exists the possibility that some event might cause the tree cache to become out of sync with the vnode backend store.  There are two processes to control this should it occur:
 
 - when requested to find all Keys and Version Vectors for a set of segment IDs, the tree cache is also rebuilt for those leaves as part of the query.
-- periodically there will be a cache rebuild event, where there will be a fold over the key store, and a full rebuild of the tree cache.
+- periodically there will be a cache rebuild event, where there will be a fold over the keystore, and a full rebuild of the tree cache.
 
-When running Anti-entropy in parallel mode, there is also a need for periodic rebuilds of the key store.  These may be expensive events, depending on the size and type of the store.  The rebuild jobs use random factors to try and prevent coordination of rebuilds between stores, and rebuilds are also queued using the node worker pool to prevent excessive concurrency of rebuilds.
+When running Anti-entropy in parallel mode, there is also a need for periodic rebuilds of the keystore.  These may be expensive events, depending on the size and type of the store.  The rebuild jobs use random factors to try and prevent coordination of rebuilds between stores, and rebuilds are also queued using the node worker pool to prevent excessive concurrency of rebuilds.
 
 Inter-cluster reconciliation uses the same principles as intra-cluster reconciliation.  For inter-cluster reconciliation the state of the clusters must be compared, not the state of the vnodes - two clusters may have different ring sizes, so a vnode-to-vnode reconciliation would not necessarily work.  To find the state of the cluster, the trees for all preflists can be merged into one tree using the `xor` operation.  Special coverage queries known as AAE folds, are used to either merge tree components, or to find Keys and Version Vectors across the cluster.
 
@@ -132,7 +140,7 @@ The cost of resolving entropy inter-cluster is higher than with intra-cluster en
 
 There are a number of internal Riak services that are built on a common queue behaviour: real-time replication, the reaper, the eraser and the reader.
 
-These queues have a small in-memory portion, but once the queues grow beyond that minimal size they are written to disk using the internal Erlang `disk_log` facility.  The use of disk for the queue is solely to control the amount of memory consumed by the queue, as Riak has no protection against the overuse of memory within a node.  When a node is restarted, and disk-based queues will be erased - to prevent a situation where a restart due to corruption of a queue leads to a continuous cycle of reboots.
+These queues have a small in-memory portion, but once the queues grow beyond that minimal size they are written to disk using the internal Erlang `disk_log` facility.  The use of disk for the queue is solely to control the amount of memory consumed by the queue, as Riak has no protection against the overuse of memory within a node.  When a node is restarted, the disk-based queues will be erased.  This prevents a situation where a restart due to corruption of a queue, leads to a continuous cycle of reboots as the same corruption is reprocessed.
 
 Each queue has multiple priorities, and an item added to the queue is assigned a priority.  Higher priority items are always consumed before lower priority items.
 
@@ -143,28 +151,28 @@ The Riak KV store is built on top of a generic platform for building distributed
 - `riak_core_ring`
   - An implementation of [the ring](#the-ring---the-distribution-of-vnodes), the distribution function in Riak.
 - `riak_core_ring_manager`
-  - A process that marshalls updates to the ring, and ensures that stable versions of the ring are available to database processes via a low latency cache.
-`riak_core_vnode`
-  - The behaviour which the `riak_kv_vnode` implements, that defines the callback functions necessary for the vnode to handle requests and also changes to the ring (e.g. handoffs).
-`riak_core_vnode_proxy`
+  - A process that marshals updates to the ring, and ensures that stable versions of the ring are available to database processes via a low latency cache.
+- `riak_core_vnode`
+  - The behaviour which the `riak_kv_vnode` implements, defining the callback functions necessary for the vnode to handle requests and also changes to the ring (e.g. handoffs).
+- `riak_core_vnode_proxy`
   - Every vnode has a proxy that forwards requests to the vnode, whilst tracking the size of the message queue on the vnode.
-  - The proxy is repsonsible for blocking access to the vnode when the message queue (also known as the mailbox) is overloaded.
+  - The proxy is responsible for blocking access to the vnode when the message queue (also known as the mailbox) is overloaded.
   - All vnode requests are forwarded through the proxy, but responses bypass the proxy and are sent directly back to the requesting process.
-`riak_core_vnode_manager`
+- `riak_core_vnode_manager`
   - Responsible for starting local vnodes when required by the ring, and stopping those vnodes no longer required.
     - The receipt of a request for a vnode that is not started locally, will also prompt the starting of a vnode - there is no wait for periodic ring checks to detect the change of topology.
   - Also triggers handoffs for vnodes in response to cluster changes, through the `riak_core_handoff_manager`.
-  - The initial trigger for a handoff is a vnode timeout, when a vnode sees a period of inactivity beyond the timout, it will contact the `riak_core_vnode_manager` to see if a handoff is required.
-`riak_core_handoff_manager`
-  - Manages handoffs required for cluster topology changes or vnode repiars.
+  - The initial trigger for a handoff is a vnode timeout, when a vnode sees a period of inactivity beyond the timeout, it will contact the `riak_core_vnode_manager` to see if a handoff is required.
+- `riak_core_handoff_manager`
+  - Manages handoffs required for cluster topology changes or vnode repairs.
   - Applies concurrency controls, tracking progress and the success or failure of transfers
-`riak_core_capability`
+- `riak_core_capability`
   - A mechanism for registering the capability of a node, and then discovering the "lowest capability" for a given feature supported by all nodes in the cluster.
   - Required to manage functional changes dependent on the availability of updated features, in the presence of rolling upgrades.
-`riak_core_metadata_manager`
+- `riak_core_metadata_manager`
   - Stores a node-specific copy of cluster-wide metadata, detecting and resolving differences in metadata between nodes in the cluster.
   - The cluster metadata is used for information about bucket types, and security controls.
-`riak_core_claimant`
+- `riak_core_claimant`
   - A cluster node through which cluster administration changes are prompted.
 
 For further information on `riak_core`, there is a lightweight version of `riak_core` called `riak_core-lite` [for which there are helpful tutorials](https://riak-core-lite.github.io/).
@@ -231,7 +239,7 @@ Each process within Leveled has an in-memory state, that contains:
 
 These caches are designed to ensure that every CRUD request can be fulfilled on average by 1 disk action or fewer.  All compaction activity is based on bulk writes of fresh files, not on mutation of existing files.  The leveled store, when compared to alternatives, requires a relatively low volume of internal I/O actions per external request.
 
-> The leveled is focused on supporting characteristics that enable the file system page cache to be more effective, rather than managing its own caches to optimise performance.
+> The leveled backend is focused on supporting characteristics that enable the file system page cache to be more effective, rather than managing its own caches to optimise performance.
 
 Acceleration in leveled is provided through the use of hashes of keys, and the support throughout the system of hash-based lookups and lookup avoidance via bloom filters.  There is alignment between the hashes used by the ledger's filters for lookup avoidance and the hashes used in the anti-entropy merkle trees.  This alignment accelerates queries over key ranges when the results need to be filtered on leaves of the anti-entropy tree.
 
