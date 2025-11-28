@@ -279,9 +279,9 @@ There are three parts to Riak's security mechanism:
 
 ### TLS Enablement
 
-In Riak 3.4, support is provided for TLS 1.2 only.  The process for enabling TLS differs between the HTTP and PB interfaces.
+In Riak 3.4, support is provided for TLS 1.2 only.
 
-For HTTP, there are two steps to enabling TLS on the API:
+The process for enabling TLS differs between the HTTP and PB interfaces.  For HTTP, there are two steps to enabling TLS on the API:
 
 - Configure a listener on HTTPS within `riak.conf` - `listener.https.internal = <ip>:<port>`.
 - Configure file paths within `riak.conf` to valid [`PEM` files](https://en.wikipedia.org/wiki/Privacy-Enhanced_Mail) for three components:
@@ -294,7 +294,7 @@ For HTTP, there are two steps to enabling TLS on the API:
 
 The configuration will start a HTTPS listener, and any HTTP client will be able to send any supported HTTP request via TLS using that listener.
 
-For PB, it is not possible to enable TLS in isolation without [adding further security measures](#enabling-security-and-restricting-source).  The configuration of file paths to certificate and key files is required as a prerequisite for applying those measures.  No independent listener is used for PB when security is enabled, the standard listener will expect TLS negotiation if and only if security is enabled.
+For the PB interface, it is not possible to enable TLS in isolation without [adding further security measures](#enabling-security-and-restricting-source).  The configuration of file paths to certificate and key files is required as a prerequisite for applying those measures.  No independent listener is used for PB when security is enabled, the standard listener will expect TLS negotiation if and only if security is enabled.
 
 > Riak does not support any automated certificate management, or notification on pending certificate expiry.
 
