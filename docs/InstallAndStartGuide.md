@@ -112,7 +112,7 @@ service riak stop
 
 Help for further console activities can be found by using the standard `riak` script e.g. `sudo riak admin --help`
 
-{: .important }
+{: .highlight }
 > Starting Riak may require a much higher `ulimit` that default.
 
 Typically, a limit of 100000 will be acceptable for small-scale non-production systems, but larger limits will be needed for full-scale production systems.  When Riak is installed as a package, then the default limit is increased using the `LimitNOFILE` file option within the systemd service definition.

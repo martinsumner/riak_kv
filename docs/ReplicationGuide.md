@@ -23,7 +23,7 @@ Replication is considered to have three stages:
 
 Real-time replication is asynchronous in Riak, the availability and performance of one cluster should have no impact on the clusters replicating to it.  With asynchronous replication, under-pinning the system with reconciliation is important to reduce the need for operator intervention.  Simple replication failures should not need to prompt operator activity, as the failure will eventually be automatically resolved.
 
-{: .important }
+{: .highlight }
 > The speed and efficiency of inter-cluster reconciliation is a key feature of Riak.  It is normal in production systems to verify clusters are reconciled every few minutes, with the process taking less than 10s, even when clusters contain more than 10 billion objects.
 
 The guide is split into the following sections:
@@ -355,7 +355,7 @@ The following stages are required:
 
 Once the two clusters are in an `in_sync = true` state the migration is complete, and application traffic may be switched to the new cluster, and the old cluster can be decommissioned.  It is common for production systems with o(10TB) of data to manage this process in 24 to 72 hours.
 
-{: .important }
+{: .highlight }
 > If possible, migrating a cluster should be a rehearsed process, just like any other [repair or replace operational change](./OperationsAndTroubleshootingGuide.md#replace-repair-and-recover).
 
 ## Replication API
