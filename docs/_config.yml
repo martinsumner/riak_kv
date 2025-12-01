@@ -6,3 +6,19 @@ url: https://martinsumner.github.io/riak_kv/
 
 aux_links:
   OpenRiak: https://github.com/OpenRiak
+
+callouts_level: quiet # or loud
+callouts:
+  highlight:
+    color: yellow
+  important:
+    title: Important
+    color: blue
+  new:
+    title: New
+    color: green
+  note:
+    color: purple
+  warning:
+    title: Warning
+    color: red
