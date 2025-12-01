@@ -36,6 +36,7 @@ There are several potential repair and recovery processes for handling different
 
 The most common repair requirements are for proactive replace, and reactive replace: testing these processes under load prior to production deployment of Riak is recommended.
 
+{: .highlight }
 > All repair and replace operations are designed to be conducted under load.  In non-functional testing of Riak 3.4, an 8-node cluster is saturated with load (both Object API and Query API requests) to 100% CPU utilisation; and then a node is killed, cleared, re-joined and repaired under that load - with the target of never losing more 1/8th of the throughput.
 
 ### Proactive Replacement
@@ -106,6 +107,9 @@ riak eval "riak_client:remove_node_from_coverage()."
 The data can then be recovered from the other nodes in the cluster issuing the `riak_client:repair_node()` command from the `remote_console` of the replacement node.  This will prompt all vnodes which partially overlap the data held in the vnodes on the replacement node to race to play a role in repairing the node.  Each vnode will only repair the data which overlaps, filtering out any data that another vnode has already repaired (or is in the process of repairing).
 
 To improve the performance of repair, the `repair_span` configuration in the [riak_core schema section of riak.conf](https://github.com/OpenRiak/riak_core/blob/openriak-3.4/priv/riak_core.schema) can be changed to `double_pair`, and this has been proven to be more effective when used with the leveled backend together with the enablement of the `repair_deferred` option in the [riak_kv schema section of riak.conf](https://github.com/OpenRiak/riak_kv/blob/openriak-3.4/priv/riak_kv.schema).
+{: .d-inline-block }
+Available from Riak 3.4.0
+{: .label .label-purple }
 
 The combination of `repair_span = double_pair, repair_deferred = enabled` is significantly more effective when repairing under load.  With these configuration options, it should be noted that repairs will happen in key order, not in reverse order of receipt (the default).  With these changes, using the leveled backend, non-functional testing demonstrates that repairs can complete efficiently even when nodes are persistently at 100% CPU utilisation due to the handling of application requests.
 
@@ -125,6 +129,7 @@ A rolling restart may be required for some configuration changes, or as part of 
 
 The configuration of locations may speed rolling restarts, as all nodes in a location can be safely stopped and started concurrently.
 
+{: .warning }
 > Caution is required when performing a rolling restart when using the memory backend, as the pre-existing data is not transferred during the restart and is lost by the restart.
 
 ### Repair an individual leveled store
@@ -183,6 +188,7 @@ It is recommended to test all upgrades in pre-production environments.  If no pr
 
 If local changes have been made to `riak.conf`, the package manager should leave the `riak.conf` file unchanged during an upgrade.  A release change may alter a default value in configuration, and if that default value was originally added to the `riak.conf` uncommented - the new default will not take effect following the upgrade, as the `riak.conf` is not altered.
 
+{: .note }
 > In configuration management of `riak.conf` files, the potential issue of changing defaults needs to be accounted for i.e. ensure the managed version of `riak.conf` is seeded with a new default `riak.conf` file produced for each release, before context-specific changes are applied.
 
 As with other rolling operations, the operations can be accelerated through the use of locations, by changing a location per-cycle not just a node per-cycle.  Awaiting both the triggering and completion of handoffs between cycles is required for a smooth transition.
@@ -300,6 +306,7 @@ The stats represent the statistics on the node from which they were requested.  
 
 Read repairs will be invoked directly when a user GET request reveals an out-of-date or missing object within the preflist
 
+{: .note }
 > Although GETs will by default respond to the client on quorum responses, all GET processes continue to all responses have returned or timed out.  The read repair is then triggered if required, based on all responses ot just the quorum.
 
 Each read repair, will update the `read_repairs` and `read_repairs_total` statistic available [via riak stats](#riak-stats).  Other stats updates are also made:
@@ -338,6 +345,10 @@ Each worker pool will regularly log its current queue length and last checkout t
 ## Garbage Collection - Reap, Erase and Scheduled Compaction
 
 ### Riak KV Eraser and Riak KV Reaper
+
+{: .d-inline-block }
+Available from Riak 3.0.10
+{: .label .label-green }
 
 The `riak_kv_eraser` is a process that receives requests to delete keys, queues those requests, and continuously erases keys from that queue.  Refer to the [API guide for AAE Fold](./OtherAPI.md#aae-fold-api) for information on triggering a `erase_keys` AAE fold to feed the eraser queue.
 
