@@ -186,12 +186,12 @@ There are five configuration items required to set up a sink for real-time repli
   - The count of sink workers which will be used on this node to fetch replicated objects from the source.
   - May be limited to control the impact of a sink cluster on the source cluster, in particular when fetching a backlog from the queue.
 - `replrtq_peer_discovery = enabled`
-{: .d-inline-block }
-Available from Riak 3.0.10
-{: .label .label-green }
   - Enables a peer discovery process, which will use the configured peer to discover other peers in the cluster.
   - The cluster listeners on that protocol must be listening on reachable IP addresses and ports for peer discovery to work (i.e. binding a listener to `0.0.0.0` will not work).
   - If the application requires the standard Riak listener to be bound to an unreachable IP address, then the alternative protocol should be used for replication, with the alternative listener configured on a reachable address.
+{: .d-inline-block }
+Available from Riak 3.0.10
+{: .label .label-green }
 
 A backoff algorithm is used on the sink to reduce the frequency of requests to nodes returning error responses, and increase the frequency to nodes continuously having ready replication events on the queue.  This means that sink workers will automatically favour fetching from nodes with backlogs of replication activity.
 
