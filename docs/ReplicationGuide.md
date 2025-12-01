@@ -186,6 +186,7 @@ There are five configuration items required to set up a sink for real-time repli
   - The count of sink workers which will be used on this node to fetch replicated objects from the source.
   - May be limited to control the impact of a sink cluster on the source cluster, in particular when fetching a backlog from the queue.
 - `replrtq_peer_discovery = enabled`
+{: .d-inline-block }
 Available from Riak 3.0.10
 {: .label .label-green }
   - Enables a peer discovery process, which will use the configured peer to discover other peers in the cluster.
