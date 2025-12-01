@@ -23,6 +23,7 @@ Replication is considered to have three stages:
 
 Real-time replication is asynchronous in Riak, the availability and performance of one cluster should have no impact on the clusters replicating to it.  With asynchronous replication, under-pinning the system with reconciliation is important to reduce the need for operator intervention.  Simple replication failures should not need to prompt operator activity, as the failure will eventually be automatically resolved.
 
+{: .important }
 > The speed and efficiency of inter-cluster reconciliation is a key feature of Riak.  It is normal in production systems to verify clusters are reconciled every few minutes, with the process taking less than 10s, even when clusters contain more than 10 billion objects.
 
 The guide is split into the following sections:
@@ -119,12 +120,14 @@ There are four basic ways of creating replication references: real-time, reconci
 
 If a node is enabled as a replication source, each PUT that the node coordinates will be sent to the source queue manager to be checked against the source queue configuration, and it will be added to each queue for which there is a configuration match.  The coordinating nodes are normally spread evenly across the cluster; although if a node is in a degraded state, the vnodes on that node are less likely to be chosen as coordinators by the put process.
 
+{: .note }
 > PUTs on the deprecated write-once PUT path are not coordinated, and so are incompatible with replication.
 
 If [reconciliation is enabled](#configuration-of-all-cluster-reconciliation), a reconciliation check may result in deltas being discovered.  The node running the check will be automatically configured to queue up replication references for any required object on the node replication queue, where the local version of the object was discovered to be more advanced than the object in the remote cluster.
 
 It is also possible for reconciliation to be bidirectional, so that a check can prompt a remote peer to queue a replication reference where the remote cluster holds the more advanced version.
 
+{: .note }
 > Bidirectional reconciliation is at least twice as efficient as one-way reconciliation.
 
 Reconciliation is throttled to repair slowly, so generally only a small number of references will be generated for each full-sync check, even when deltas between clusters are large.
@@ -135,10 +138,12 @@ As AAE folds can prompt large volumes of references, using coverage queries and 
 
 Clusters may also require garbage collection jobs to be enabled using AAE folds - to erase out-of-date keys, and reap tombstones.  These folds will also generate replication references in bulk, and so caution is again required with over-provisioned sink workers.  With garbage collection though, the `tombstone_pause` is applied on every delete or reap makes the problem of overload less probable.
 
+{: .warning }
 > Reap jobs should not be scheduled to overlap with cluster administration changes (e.g. joins, leaves or replaces) when replication and reconciliation are enabled.  It is possible that reaps that occur during transfers are not applied correctly, and this may then lead to resource expenditure on reconciliation effort that will ultimately only resurrect reaped tombstones.
 
 Riak can be configured to operate in one of [three possible delete modes](./InstallAndStartGuide.md#configuration-of-riak---delete-mode).  Using a delete mode other than `keep`is tested with replication, but there will be an increased probability of false-negative reconciliation events that may consume resources on the cluster.
 
+{: .note }
 > When running replication, it is recommended to change from the default setting and use the delete mode of `keep`.  
 
 It is theoretically possible to prompt replication events through other mechanisms (pre or post commit hooks, or map/reduce jobs).  However, these methods are not subject to any testing as part of the Riak development process.
@@ -180,7 +185,7 @@ There are five configuration items required to set up a sink for real-time repli
 - `replrtq_sinkworkers = <worker_count>`
   - The count of sink workers which will be used on this node to fetch replicated objects from the source.
   - May be limited to control the impact of a sink cluster on the source cluster, in particular when fetching a backlog from the queue.
-- `replrtq_peer_discovery = enabled`
+- `replrtq_peer_discovery = enabled` {: .d-inline-block } Available from Riak 3.0.10 {: .label .label-green }
   - Enables a peer discovery process, which will use the configured peer to discover other peers in the cluster.
   - The cluster listeners on that protocol must be listening on reachable IP addresses and ports for peer discovery to work (i.e. binding a listener to `0.0.0.0` will not work).
   - If the application requires the standard Riak listener to be bound to an unreachable IP address, then the alternative protocol should be used for replication, with the alternative listener configured on a reachable address.
@@ -206,11 +211,12 @@ Further configuration can be added for replication using `riak.conf`:
 - `replrtq_prompt_max_seconds`;
   - The peer discovery is refreshed periodically based on this timer.
   - if a node is joined, downed or left; the change in peer availability will be detected at the next prompt.
-- `repl_reap`
+- `repl_reap` {: .d-inline-block } Available from Riak 3.0.18 {: .label .label-green }
   - Whether reap requests should be replicated like other changes.
   - The default is `disabled` for backwards compatibility, but this will require reap jobs to be coordinated across clusters.
   - When using a `delete_mode` of `keep`, then the default should be changed and `repl_reap` should be `enabled`.
 
+{: .note }
 > Note that for the options `replrtq_vnodecheck` and `repl_reap` non-default settings are recommended
 
 ## Configuration of All-Cluster Reconciliation
@@ -221,6 +227,7 @@ It is commonly most efficient to reconcile all data, rather than partial data.  
 
 To use the inter-cluster reconciliation then Tictac AAE must be enabled in `riak.conf` - `tictacaae_active = active`.  Enabling `tictacaae_active` will place extra load on the cluster at write time, if the `leveled` backend is not used as a sole backend.  In this case there will be a need for a parallel key store (as opposed to a native leveled store), which will require keys and metadata to be written to a dedicated AAE store.
 
+{: .note }
 > The configuration option `tictacaae_storeheads` is not required to run all-cluster reconciliation, but is recommended to get the full operational feature set of AAE folds.
 
 When enabling Tictac AAE for the first time, it will not be usable by reconciliation until all trees have been built.  Trees will periodically rebuild, and full-sync reconciliation checks should continue to operate as expected during rebuilds.
@@ -229,6 +236,7 @@ When enabling Tictac AAE for the first time, it will not be usable by reconcilia
 
 Full-sync replication requires the existence of source queue definitions and sink worker configurations, in order for discovered deltas to be repaired.  The same configurations can be used as for real-time replication.  If there is a need to support reconciliation without allowing for real-time replication - then the `block_rtq` keyword can be used instead of `any` on the source queue definition.
 
+{:. note }
 > In configuration, reconciliation processes are commonly referred to by the initialism `ttaaefs` - TicTac AAE Full-Sync.
 
 To enable reconciliation an initial configuration is required:
@@ -255,6 +263,7 @@ To enable reconciliation an initial configuration is required:
 
 Each node has a single manager for reconciliation - the `riak_kv_ttaaefs_manager`.  A manager can only have one configuration, it can manage reconciliation with one cluster for one `n_val` (and for one type, either all-cluster or per-bucket).  If the cluster needs to reconcile with other clusters, or with different settings, then other nodes should handle the alternate configurations.
 
+{: .node }
 > Reconciliation work is based on comparisons between clusters using AAE folds; so a single peer relationship between just two nodes is sufficient to reconcile the whole cluster.  However, for resilience and capacity reasons, ideally all nodes should be configured with different peer relationships.
 
 To set up a peer relationship to another cluster, the following configuration is required:
@@ -321,6 +330,7 @@ When deltas are discovered in trees, the scanning required to compare keys and c
 
 The rules of the `ttaaefs_<sync_type>check` configuration are followed with per-bucket synchronisation.  So using `ttaaefs_autocheck` when a previous check succeeded will scan only recently modified items to build the tree for comparison.  This does mean that non-recently modified variations within the bucket (such as resurrected objects or tombstones) will not be detected by `ttaaefs_autocheck` as when `ttaaefs_scope = all`.  When using per-bucket full-sync, it may be wise to occasionally schedule a `ttaaefs_allcheck` to cover this scenario.
 
+{: .note }
 > Note that a scheduled run of `ttaaefs_allcheck` will occur regardless of whether the current time is within or outside of the `allcheck.window`.  The window is related only to the running of `ttaaefs_autocheck`, to prevent a `ttaaefs_autocheck` from being escalated to a `ttaaefs_allcheck` within the window.
 
 When using per-bucket full-sync, and performing a rolling upgrade to Riak 3.2.3 or 3.4.0 (from earlier releases than Riak 3.2.3), there may be errors merging trees.  To prevent these errors during the rolling upgrade, then either disable full-sync for the period of the upgrade, or use the configuration option to force the new nodes to use legacy format trees:
@@ -345,6 +355,7 @@ The following stages are required:
 
 Once the two clusters are in an `in_sync = true` state the migration is complete, and application traffic may be switched to the new cluster, and the old cluster can be decommissioned.  It is common for production systems with o(10TB) of data to manage this process in 24 to 72 hours.
 
+{: .important }
 > If possible, migrating a cluster should be a rehearsed process, just like any other [repair or replace operational change](./OperationsAndTroubleshootingGuide.md#replace-repair-and-recover).
 
 ## Replication API
@@ -402,7 +413,7 @@ When a cluster relationship has been seeded, and real-time replication has been 
 Should a delta occur, there will be logs not just of the sync status, but with information about the deltas discovered. Following a `clock_compare`, a log will be generated for each bucket where repairs were required, with the low and high modification dates associated with the repairs:
 
 {% raw %}
-```
+```console
 riak_kv_ttaaefs_manager:report_repairs:1071 AAE exchange=122471781 work_item=all_check type=full repaired key_count=18 for bucket=<<"domainDocument_T9P3">> with low date {{2020,11,30},{21,17,40}} high date {{2020,11,30},{21,19,42}}
 riak_kv_ttaaefs_manager:report_repairs:1071 AAE exchange=122471781 work_item=all_check type=full repaired key_count=2 for bucket=<<"domainDocument_T9P9">> with low date {{2020,11,30},{22,11,39}} high date {{2020,11,30},{22,15,11}}
 ```
@@ -417,7 +428,7 @@ application:set_env(riak_kv, ttaaefs_logrepairs, true).
 This will produce logs for each individual key:
 
 {% raw %}
-```
+```console
 @riak_kv_ttaaefs_manager:generate_repairfun:973 Repair B=<<"domainDocument_T9P3">> K=<<"000154901001742561">> SrcVC=[{<<170,167,80,233,12,35,181,35,0,49,73,147>>,{1,63773035994}},{<<170,167,80,233,12,35,181,35,0,97,246,69>>,{1,63773990260}}] SnkVC=[{<<170,167,80,233,12,35,181,35,0,49,73,147>>,{1,63773035994}}]
 
 @riak_kv_ttaaefs_manager:generate_repairfun:973 Repair B=<<"domainDocument_T9P3">> K=<<"000154850002055021">> SrcVC=[{<<170,167,80,233,12,35,181,35,0,49,67,85>>,{1,63773035957}},{<<170,167,80,233,12,35,181,35,0,97,246,68>>,{1,63773990260}}] SnkVC=[{<<170,167,80,233,12,35,181,35,0,49,67,85>>,{1,63773035957}}]
@@ -430,7 +441,7 @@ This will produce logs for each individual key:
 
 At the end of each stage of a an exchange a log EX003 is produced which explains the outcome of the exchange:
 
-```
+```console
 log_level=info log_ref=EX003 pid=<0.30710.6> Normal exit for full exchange purpose=day_check in_sync=true  pending_state=root_compare for exchange id=8c11ffa2-13a6-4aca-9c94-0a81c38b4b7a scope of mismatched_segments=0 root_compare_loops=2  branch_compare_loops=0  keys_passed_for_repair=0
 
 log_level=info log_ref=EX003 pid=<0.13013.1264> Normal exit for full exchange purpose=range_check in_sync=false  pending_state=clock_compare for exchange id=921764ea-01ba-4bef-bf5d-5712f4d81ae4 scope of mismatched_segments=1 root_compare_loops=3  branch_compare_loops=2  keys_passed_for_repair=15
