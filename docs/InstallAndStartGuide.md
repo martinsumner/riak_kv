@@ -264,8 +264,8 @@ The `node_confirms` bucket property has a default value of `0`, and may be set t
 The `node_confirms` property is applied on both reads and writes.  The parameter is also applied on reads so that an application can understand on read that a previous put has indeed reached the required level of diversity.  If a `PUT` request fails due to `node_confirms`, a successful `GET` is sufficient to confirm that through eventual consistency the required diversity has been achieved.
 
 #### Property - sync_on_write
-
 {: .d-inline-block }
+
 Available from Riak 3.0.8
 {: .label .label-green }
 
@@ -280,8 +280,8 @@ It is recommended not to use backend sync configuration, and instead control flu
 If replicating between clusters and `one` is used as the `sync_on_write` bucket property, then the cluster that receives the PUT from the application will flush to disk on one node - but all clusters receiving the PUT via replication will not be required to flush to disk on any node.  The properties of `backend` or `all` are treated equally in source and sink clusters.
 
 #### Property - aae_tree_exclude
-
 {: .d-inline-block }
+
 Available from Riak 3.4.0
 {: .label .label-purple }
 

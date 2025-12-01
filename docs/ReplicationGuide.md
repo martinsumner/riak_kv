@@ -185,7 +185,7 @@ There are five configuration items required to set up a sink for real-time repli
 - `replrtq_sinkworkers = <worker_count>`
   - The count of sink workers which will be used on this node to fetch replicated objects from the source.
   - May be limited to control the impact of a sink cluster on the source cluster, in particular when fetching a backlog from the queue.
-- `replrtq_peer_discovery = enabled`
+- `replrtq_peer_discovery = enabled` <span>Available from Riak 3.0.10</span>{: .label .label-green }
   - Enables a peer discovery process, which will use the configured peer to discover other peers in the cluster.
   - The cluster listeners on that protocol must be listening on reachable IP addresses and ports for peer discovery to work (i.e. binding a listener to `0.0.0.0` will not work).
   - If the application requires the standard Riak listener to be bound to an unreachable IP address, then the alternative protocol should be used for replication, with the alternative listener configured on a reachable address.
@@ -211,7 +211,7 @@ Further configuration can be added for replication using `riak.conf`:
 - `replrtq_prompt_max_seconds`;
   - The peer discovery is refreshed periodically based on this timer.
   - if a node is joined, downed or left; the change in peer availability will be detected at the next prompt.
-- `repl_reap` {: .d-inline-block } Available from Riak 3.0.18 {: .label .label-green }
+- `repl_reap` <span>Available from Riak 3.0.18</span>{: .label .label-green }
   - Whether reap requests should be replicated like other changes.
   - The default is `disabled` for backwards compatibility, but this will require reap jobs to be coordinated across clusters.
   - When using a `delete_mode` of `keep`, then the default should be changed and `repl_reap` should be `enabled`.

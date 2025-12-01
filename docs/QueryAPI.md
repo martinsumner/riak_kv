@@ -5,8 +5,8 @@ layout : default
 ---
 
 # Riak KV - Query API
-
 {: .d-inline-block }
+
 Available from Riak 3.4.0
 {: .label .label-purple }
 

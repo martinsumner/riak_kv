@@ -1,5 +1,5 @@
-title: OpenRiak Quick Docs
-description: starter documentation for the OpenRiak Riak project
+title: OpenRiak QuickDocs
+description: Documentation for the OpenRiak Riak project
 theme: just-the-docs
 
 plugins:
@@ -8,7 +8,7 @@ plugins:
 url: https://martinsumner.github.io/riak_kv/
 
 aux_links:
-  OpenRiak: https://github.com/OpenRiak
+  "Discuss OpenRiak on GitHub": https://github.com/orgs/OpenRiak/discussions
 
 logo: "/assets/images/openriak_cropped.png"
 

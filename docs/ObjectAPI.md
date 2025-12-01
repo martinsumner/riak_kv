@@ -127,8 +127,8 @@ The most common options used are:
 There are a number of other options, but changing of these defaults is not recommended without an understanding of the underlying Riak code:  `w`, `r`, `dw`, `asis`, `sloppy_quorum` and `timeout`.
 
 ## Conditional Requests
-
 {: .d-inline-block }
+
 Available from Riak 3.4.0
 {: .label .label-purple }
 
