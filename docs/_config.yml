@@ -10,7 +10,9 @@ url: https://martinsumner.github.io/riak_kv/
 aux_links:
   OpenRiak: https://github.com/OpenRiak
 
-favicon_ico: "./assets/images/favicon.ico"
+logo: "/assets/images/openriak_l2_PNG.png"
+
+favicon_ico: "/assets/images/favicon.ico"
 
 callouts_level: quiet # or loud
 callouts:
