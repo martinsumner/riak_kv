@@ -37,7 +37,7 @@ The following choices exist:
 - **multi-backend** (supported only in limited use cases, specifically as a multi-bitcask backend)
 
 {: .highlight }
-> In most common deployment scenarios, the best choice when the full functionality of Riak is required, is to use the leveled backend.
+In most common deployment scenarios, the best choice when the full functionality of Riak is required, is to use the leveled backend.
 
 The bitcask backend may be used, especially if
 
