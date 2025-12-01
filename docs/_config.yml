@@ -2,6 +2,9 @@ title: OpenRiak Quick Docs
 description: starter documentation for the OpenRiak Riak project
 theme: just-the-docs
 
+plugins:
+  - jekyll-relative-links
+
 url: https://martinsumner.github.io/riak_kv/
 
 aux_links:
