@@ -30,7 +30,7 @@ Installation guides for different OTP versions are available via erlang.org:
 - [OTP 24 Installation Guide](https://www.erlang.org/docs/24/installation_guide/install);
 - [OTP 26 Installation Guide](https://www.erlang.org/docs/26/installation_guide/install).
 
-For convenience `kerl` may be used to simplify the installation of Erlang/OTP - https://github.com/kerl/kerl.
+For convenience [`kerl` may be used to simplify the installation of Erlang/OTP](https://github.com/kerl/kerl).
 
 Some points to note when installing Erlang:
 
@@ -48,7 +48,7 @@ Riak is available to clone at https://github.com/OpenRiak/riak.
 
 Each major release has an associated branch which represents current development activity.  For Riak 3.2 this is `openriak-3.2`, For Riak 3.4 this is `openriak-3.4`.  Building from these branches may contain unreleased changes.
 
-Each release version is tagged - https://github.com/OpenRiak/riak/releases, and described in the [release notes](https://github.com/OpenRiak/riak/blob/openriak-3.4/RELEASE-NOTES.md).  For older releases, these may be found at https://github.com/OpenRiak/riak-forked/releases, and for the pre-OpenRiak era https://github.com/basho/riak/releases.
+Each [release version is tagged](https://github.com/OpenRiak/riak/releases), and described in the [release notes](https://github.com/OpenRiak/riak/blob/openriak-3.4/RELEASE-NOTES.md).  For older releases, [some are available on OpenRia](https://github.com/OpenRiak/riak-forked/releases), and for the pre-OpenRiak era [releases on the basho github](https://github.com/basho/riak/releases).
 
 Tagged releases contain a `rebar.lock` file which ensures all major dependencies are fetched from the precise commit made at the point of release.
 
@@ -112,7 +112,10 @@ service riak stop
 
 Help for further console activities can be found by using the standard `riak` script e.g. `sudo riak admin --help`
 
-Starting Riak may require a higher `ulimit` to be set within the shell - a limit of 100000 will be acceptable for small-scale non-production systems, but larger limits will be needed for full-scale production systems.  When Riak is installed as a package, then the default limit is increased using the `LimitNOFILE` file option within the systemd service definition.
+{: .important }
+> Starting Riak may require a much higher `ulimit` that default.
+
+Typically, a limit of 100000 will be acceptable for small-scale non-production systems, but larger limits will be needed for full-scale production systems.  When Riak is installed as a package, then the default limit is increased using the `LimitNOFILE` file option within the systemd service definition.
 
 ### Configuration of Riak - key riak.conf changes
 
@@ -262,6 +265,10 @@ The `node_confirms` property is applied on both reads and writes.  The parameter
 
 #### Property - sync_on_write
 
+{: .d-inline-block }
+Available from Riak 3.0.8
+{: .label .label-green }
+
 The `sync_on_write` bucket property has a default value of `backend`, and allows for more flexible guarantees about data being flushed to disk.  By default, Riak backends will confirm a PUT once a file write has been completed, but that write may only be resident in memory in the file-system page cache; so at this stage the data is not safe (for example if a power failure simultaneously killed multiple nodes).  Riak backends can be configured to flush all writes to disk, but this has a significant impact on throughput, both in normal operation (each PUT prompts n_val flushes per cluster) and also when managing transfers between nodes.
 
 The `sync_on_write` bucket property can be configured to `backend` (default - revert back to original behaviour, and use only the backend setting), `one` or `all`.  It is assumed when using `sync_on_write` the backend will be configured not to flush to disk on every write.  In this case a write to a bucket with `backend` may be resident in memory on all nodes after the PUT is confirmed to the application client.  If `all` is set, all writes that have been confirmed will also have been flushed (by default 2 of 3 writes must be confirmed before the client receives a positive response).  If `one` is used, the first location to process the PUT will flush to disk, where other locations are allowed to hold it in memory in the file system page cache.
@@ -275,7 +282,7 @@ If replicating between clusters and `one` is used as the `sync_on_write` bucket 
 #### Property - aae_tree_exclude
 
 {: .d-inline-block }
-Available from Riak 3.4
+Available from Riak 3.4.0
 {: .label .label-purple }
 
 The `aae_tree_exclude` bucket property has a default value of `false` and allows for some flexibility when reconciling between clusters using nextgenrepl full-sync.  In general with Riak nextgenrepl it is assumed that clusters aim to contain the same data.  It is possible to replicate specific buckets between specific sources, and also possible to reconcile only individual buckets between clusters - but per-bucket reconciliation is not as efficient as full-cluster reconciliation.  The efficiency of full cluster reconciliation is based on the use of cached and mergeable [AAE (active anti-entropy) merkle trees](./RiakTheoryGuide.md#anti-entropy) that represent all the data in the store.

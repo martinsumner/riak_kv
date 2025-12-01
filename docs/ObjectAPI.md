@@ -16,6 +16,7 @@ Objects can be fetched and updated via either a HTTP or Protocol Buffer API.  Co
   - Always ensure that objects will be supported via HTTP, even when using PB.
 - Using the HTTP API will provide greater flexibility to control access to Riak via standard internet infrastructure (e.g. Web-Application Firewalls, Proxies and Load-Balancers).
 
+{: .note }
 > New APIs added to Riak will be added to the HTTP API first.  It is expected that in the long term the performance of the HTTP API will be improved, and that the relative ubiquity of HTTP will evolve the choice of API towards HTTP being the default protocol.
 
 The [PB Object API is described in the riak_pb repository](https://github.com/OpenRiak/riak_pb/blob/e908ddaadc06cb56e248f197dc2dca7d759e53b2/src/riak_kv.proto#L45-L125), but the concepts are the same as for the HTTP API.
@@ -43,13 +44,14 @@ The Riak object Identifier is split into three parts:
 
 Internally within Riak all three elements are binary identifiers,  With the Object HTTP API these elements are represented within the URL e.g. `/types/BucketType/buckets/Bucket/keys/Key`.
 
+{: .warning }
 > Although it is possible to use non-URL-safe identifiers using the Protocol Buffer API, it is important not to do so - as any object using a non-URL safe identifier will not be accessible via the HTTP API, as there is no encoding of non-Alphanumeric identifier parts.
 
 The [Bucket Type](./InstallAndStartGuide.md#configuration-of-riak---bucket-properties) is used to describe the properties of the object.  Properties are associated with a Bucket Type, and all Objects in the Buckets under that type will inherit those properties. The Bucket is a namespace, and a Bucket Type is allowed to have an arbitrary number of Buckets.  A Bucket cannot be moved between Bucket Types, but the properties of an individual Bucket may be changed to override that of the Bucket Type.  Keys are unique identifiers of an object within a Bucket.
 
 A Bucket Type cannot be used via the API until it has been created and activated, to do this see:
 
-```bash
+```console
 riak admin bucket-type --help
 ```
 
@@ -61,6 +63,7 @@ Within Riak, object values are generally opaque to Riak.  The schema of the valu
 
 Riak is not optimised for small values, although there is no lower limit to the size of the value.
 
+{:. note }
 > Typically values stored in Riak are between o(1KB) and o(1MB) in size, but are not constrained by these limits.
 
 To Riak object values are generally opaque, but Riak does have support for [data-types](./OtherAPI.md#the-data-type-api); specially formatted values where the handling of conflict is deterministic and managed within the database, so the application does not see siblings even though [`allow_mult` is set to `true`](./InstallAndStartGuide.md#property---allow_mult).
@@ -125,8 +128,13 @@ There are a number of other options, but changing of these defaults is not recom
 
 ## Conditional Requests
 
+{: .d-inline-block }
+Available from Riak 3.4.0
+{: .label .label-purple }
+
 Conditional updates are very useful when looking to prevent siblings.  By default, any concurrent updates will lead to sibling generation, and handling siblings within application code may be expensive (and in some cases may require user intervention).  This can be controlled by making PUT requests conditional, with configurable degrees of strictness on how the condition will be checked to prevent concurrent changes.
 
+{: .note }
 > Conditional updates allow for improved consistency, but not formal consistency.
 
 There are four levels of strictness to the application of conditions:
@@ -153,7 +161,7 @@ There are four levels of strictness to the application of conditions:
 
 The level of strictness is set for the entire cluster, using the `conditional_put_mode` and `token_request_mode` configuration items in `riak.conf`:
 
-```shell
+```console
 riak admin describe conditional_put_mode
 riak admin describe token_request_mode
 ```
@@ -283,6 +291,7 @@ Within the object API load distribution is first based on consistent hashing (to
 
 The Object API is designed to be the most efficient of all the Riak APIs; it is assumed that requests to the Object API will occur with at least an order of magnitude of frequency greater than requests to other APIs.
 
+{: .highlight }
 > The primary target of Riak is not to minimise response times in normal conditions, but to provide predictable response times in extreme conditions with resource contention, device failure and device recovery.
 
 In summary, the performance targets for the Object API are:

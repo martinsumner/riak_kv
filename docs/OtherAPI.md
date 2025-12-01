@@ -22,6 +22,7 @@ The AAE Fold API requires the configuration of `tictacaae_active = active`, othe
 
 When using any other backend or multi-backend this will require an additional parallel keystore, which may have an impact on the achievable PUT throughput, and the memory used by Riak.  The use of a parallel backend also requires periodic keystore rebuilds, to ensure that the keystore correctly represents the content in the backend store.
 
+{: .note }
 > When using parallel mode, the parallel store must be configured with `tictacaae_storeheads = enabled` to use the full functionality of AAE Folds.
 
 The AAE Fold API:
@@ -195,6 +196,7 @@ The AAE folds will scan over blocks of keys and metadata.  The performance of AA
 
 Where a fold is returning a list of keys, or keys and clocks, it is necessary for the node coordinating the fold to hold the full result-set in memory; and on conclusion of the fold the results will need to be copied at least once to produce an API response.  The performance of the fold will also be impacted by an accumulator which grows with the number of entries covered.
 
+{: .note }
 > It is important to consider the memory impact of running an AAE fold on the node that handles the request, especially when using a `find_keys` fold.
 
 ### AAE Folds via the Command Line
@@ -322,6 +324,7 @@ The use of Map/Reduce API is deprecated in Riak 3.4, and the API will be retired
 
 For using Map/Reduce with Erlang functions, the API is unchanged since Riak 2.2.3, so refer to the [legacy documentation](https://docs.riak.com/riak/kv/2.2.3/developing/app-guide/advanced-mapreduce/index.html) for further information.  The Map/Reduce API no longer supports JavaScript functions.
 
+{: .note }
 > For querying data the [Query API](./QueryAPI.md) should be used in preference to the Map/Reduce API.  The Query API is under active development to expand the number of Map/Reduce use cases it covers, in particular the ability to prompt the fetching of multiple objects.
 
 ## The List API
@@ -330,6 +333,7 @@ The list API supports the listing of keys and buckets.  The List API is deprecat
 
 The APIs are unchanged since Riak 2.2.3, so refer to the legacy documentation for information on [list keys](https://docs.riak.com/riak/kv/2.2.3/developing/api/http/list-keys/index.html) o [list buckets](https://docs.riak.com/riak/kv/2.2.3/developing/api/http/list-buckets/index.html).
 
+{: .warning }
 > The use of list keys or list buckets may have a critical impact on the performance of production clusters.  The AAE Fold alternatives are safe to use on production systems as long as two copies of the result-set can be held within available memory on a single node.
 
 ## Legacy Query API
@@ -340,6 +344,7 @@ The binary secondary indexes supported by the legacy index queries, are compatib
 
 The functionality of the legacy query API is unchanged since Riak 2.2.3, so refer to the [legacy documentation](https://docs.riak.com/riak/kv/latest/developing/usage/secondary-indexes/index.html) for further information.
 
+{: .highlight }
 > The legacy API had an undocumented feature that the query attribute `term_regex` could be used to pass regular expressions to filter terms from query results within the range.  This feature is replicated in the new Query API using the `regular_expression` option.
 
 ## Strong Consistency API
