@@ -47,7 +47,7 @@ It is possible to proactively replace a node in a Riak cluster, for example if:
 - to change the storage_backend of a cluster node-by-node;
 - or to fully vacuum a node's storage backends of garbage.
 
-A proactive replace is a cluster administration change, and [follows the standard five stage process described in the general guidance on amending the cluster make-up](/docs/BuildAndScaleClusterGuide.md#forming-and-expanding-a-riak-cluster).  In the case of a proactive replace, the first stage, staging, requires the staging of two changes:
+A proactive replace is a cluster administration change, and [follows the standard five stage process described in the general guidance on amending the cluster make-up](./BuildAndScaleClusterGuide.md#forming-and-expanding-a-riak-cluster).  In the case of a proactive replace, the first stage, staging, requires the staging of two changes:
 
 - the `join` of a new node, and
 - a `replace` to indicate the old node which should be replaced.
@@ -147,7 +147,7 @@ Storage backends make use of CRC checks to detect and respond to corruption (by 
 
 Where such corruption is limited to a leveled ledger, then [a repair via leveled rebuild](#repair-an-individual-leveled-store) can be used to recover.  However, in other backends, or with a corruption in the leveled journal - it may be preferable to repair a whole vnode rather than wait for other anti-entropy processes to eventually resolve the impact of the corruption (by repairing each impacted object).
 
-The process to [complete a full node repair](#completing-a-repair) can be targeted at an individual vnode to repair just that vnode.  To prompt the repair of an individual vnode, the partition number - the [integer identifier of a vnode](/docs/RiakTheoryGuide.md#the-ring---the-distribution-of-vnodes) - must be passed to the vnode repair function.  The vnode repair function (`riak_kv_vnode_repair/1`) can be called by using the [`remote_console`](#remote-console) or directly from the command line through the `riak eval` CLI call:
+The process to [complete a full node repair](#completing-a-repair) can be targeted at an individual vnode to repair just that vnode.  To prompt the repair of an individual vnode, the partition number - the [integer identifier of a vnode](./RiakTheoryGuide.md#the-ring---the-distribution-of-vnodes) - must be passed to the vnode repair function.  The vnode repair function (`riak_kv_vnode_repair/1`) can be called by using the [`remote_console`](#remote-console) or directly from the command line through the `riak eval` CLI call:
 
 ```console
 riak eval "riak_kv_vnode:repair(<partition_number>)."
@@ -159,7 +159,7 @@ The repair node will replace any object which the store does not presently hold.
 
 Outside of the circumstances covered in the previous sections, it is not expected that there should be a need for operator intervention in the recovery from failure.  There is though an additional process for handling any unexpected scenarios, to allow for cluster wide repair of key ranges.  The `repair_key_range` operation is targeted at a specific bucket, potentially combined with a key range or last modified date range: and triggers via an AAE fold the read repair process within the cluster for that range.
 
-Refer to the [API guide for AAE Fold](/docs/OtherAPI.md#aae-fold-api) for information on triggering a `repair_key_range` AAE fold.
+Refer to the [API guide for AAE Fold](./OtherAPI.md#aae-fold-api) for information on triggering a `repair_key_range` AAE fold.
 
 The aae_fold will send repair events to the `riak_kv_reader` queue, and progress can be tracked by tracking the queue's log outputs.  There is an automated background process on each node that will consume repair events from the queue, and trigger read repair (if required) by a clientless GET of the object.  Each node's reader queue is limited to 1M requests, and requests over this limit will be discarded.  This limit is not configurable in Riak 3.4.  The `riak_kv_reader` process will dequeue items from the `riak_kv_reader` queue and prompt an internal GET request; which, should there be a discrepancy, prompt a repair via `read_repair`.
 
@@ -207,7 +207,7 @@ For the full functionality of [riak_client, see the module code](https://github.
 
 ### Running AAE Folds
 
-Refer to the [API guide for AAE Fold](/docs/OtherAPI.md#aae-fold-api) for information on triggering an AAE fold from `riak remote_console`.
+Refer to the [API guide for AAE Fold](./OtherAPI.md#aae-fold-api) for information on triggering an AAE fold from `riak remote_console`.
 
 ### riak_client remote_console commands
 
@@ -311,7 +311,7 @@ Each read repair, will update the `read_repairs` and `read_repairs_total` statis
 
 These stats indicate whether the vnode in need of repair was a primary or fallback, and whether it has been repaired as it had an out of date object, or the object was not found in that vnode.
 
-During a node failure, `n_val` fallback vnodes will be started for every unavailable primary vnode.  As the fallback vnodes start empty, a large number of read repairs may be immediately triggered, assuming the cluster is subject to application read requests.  This will in the short term impact performance, and in the long term impact handoff times when the node recovers - but in the medium term it will mean that the vnode has frequently accessed data to contribute to quorum.  The [`read_repair_primaryonly` configuration option](/docs/InstallAndStartGuide.md#configuration-of-riak---key-riakconf-changes) can be enabled to stop repairing fallback vnodes through read repair.
+During a node failure, `n_val` fallback vnodes will be started for every unavailable primary vnode.  As the fallback vnodes start empty, a large number of read repairs may be immediately triggered, assuming the cluster is subject to application read requests.  This will in the short term impact performance, and in the long term impact handoff times when the node recovers - but in the medium term it will mean that the vnode has frequently accessed data to contribute to quorum.  The [`read_repair_primaryonly` configuration option](./InstallAndStartGuide.md#configuration-of-riak---key-riakconf-changes) can be enabled to stop repairing fallback vnodes through read repair.
 
 Read repairs are also invoked by active anti-entropy.  When an intra-cluster AAE process detects a delta, it does not prompt it directly, it instead will prompt a GET request so that read repair will happen indirectly.
 
@@ -323,7 +323,7 @@ riak eval "application:set_env(riak_kv, log_readrepair, true)"
 
 ### Monitoring inter-cluster reconciliation
 
-For information on monitoring inter-cluster reconciliation and repair [refer to the NextGen Repl guide](/docs/NextGenReplGuide.md#monitoring-and-run-time-changes).
+For information on monitoring inter-cluster reconciliation and repair [refer to the NextGen Repl guide](./NextGenReplGuide.md#monitoring-and-run-time-changes).
 
 ### Monitoring node worker pools
 
@@ -339,9 +339,9 @@ Each worker pool will regularly log its current queue length and last checkout t
 
 ### Riak KV Eraser and Riak KV Reaper
 
-The `riak_kv_eraser` is a process that receives requests to delete keys, queues those requests, and continuously erases keys from that queue.  Refer to the [API guide for AAE Fold](/docs/OtherAPI.md#aae-fold-api) for information on triggering a `erase_keys` AAE fold to feed the eraser queue.
+The `riak_kv_eraser` is a process that receives requests to delete keys, queues those requests, and continuously erases keys from that queue.  Refer to the [API guide for AAE Fold](./OtherAPI.md#aae-fold-api) for information on triggering a `erase_keys` AAE fold to feed the eraser queue.
 
-Likewise the `riak_kv_reaper` process receives requests to delete tombstones, queues those requests, and continuously reaps keys referenced in the queue.  Refer to the [API guide for AAE Fold](/docs/OtherAPI.md#aae-fold-api) for information on triggering a `reap_tombs` AAE fold to feed the reaper queue.
+Likewise the `riak_kv_reaper` process receives requests to delete tombstones, queues those requests, and continuously reaps keys referenced in the queue.  Refer to the [API guide for AAE Fold](./OtherAPI.md#aae-fold-api) for information on triggering a `reap_tombs` AAE fold to feed the reaper queue.
 
 Filters within the AAE folds can be used to select specific key_ranges, or last modified date ranges for the erase or reap process.
 
@@ -403,7 +403,7 @@ The journal may also orphan files, but in Riak 3.4 there is no automated process
 
 ## Data inspection
 
-To understand more about the data being held in the cluster, information can be found using AAE folds. Refer to the [API guide for AAE Fold](/docs/OtherAPI.md#aae-fold-api) for information on triggering data inspection folds - `find_keys`, `find_tombs`, `list_buckets` and `object_stats`.
+To understand more about the data being held in the cluster, information can be found using AAE folds. Refer to the [API guide for AAE Fold](./OtherAPI.md#aae-fold-api) for information on triggering data inspection folds - `find_keys`, `find_tombs`, `list_buckets` and `object_stats`.
 
 ## Volume and performance testing
 
@@ -504,7 +504,7 @@ As well as the storage backend data folder, a Riak node also stores data in a ri
 
 ## Operation Checklist
 
-In the guide to building and scaling a cluster, the section on [choosing infrastructure](/docs/BuildAndScaleClusterGuide.md#choosing-infrastructure) provides a checklist of things to consider at the design stage, and it is worth considering the issues highlighted in that guide when troubleshooting operational issues:
+In the guide to building and scaling a cluster, the section on [choosing infrastructure](./BuildAndScaleClusterGuide.md#choosing-infrastructure) provides a checklist of things to consider at the design stage, and it is worth considering the issues highlighted in that guide when troubleshooting operational issues:
 
 - The need to avoid the accidental concurrent scheduling of expensive operational processes;
   - Disk trim jobs,

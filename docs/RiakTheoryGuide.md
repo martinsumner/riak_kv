@@ -47,7 +47,7 @@ Riak is designed to be eventually consistent, in that it is:
   - but also because it is continuously reconciled, with background process that efficiently analyse the overall system for discrepancies and proactively heal those deltas without operator intervention,
   - where that continuous reconciliation occurs both within and between clusters.
 
-It should be noted that Riak offers the same guarantees of zero-intervention eventual-consistency for both multi-cluster environments as well as single cluster environments.  However, within a cluster it is possible to enforce conditions on writes to make Riak less permissive, but less likely to result in conflict e.g. through the use of [conditional PUTs with token-based consensus](/docs/ObjectAPI.md#conditional-requests).
+It should be noted that Riak offers the same guarantees of zero-intervention eventual-consistency for both multi-cluster environments as well as single cluster environments.  However, within a cluster it is possible to enforce conditions on writes to make Riak less permissive, but less likely to result in conflict e.g. through the use of [conditional PUTs with token-based consensus](./ObjectAPI.md#conditional-requests).
 
 Care may be taken by the Riak user to avoid conflict; but inevitably there will be some object values that eventually end-up in conflict.  When in a conflicted state, an object may have two values where the database cannot determine which is the most current, often as updates were made concurrently by two different application instances.
 
@@ -67,9 +67,9 @@ In general, most applications that depend on Riak evolve strategies to restrict 
 
 ### Quorum on Read, Write and Query
 
-The default GET and PUT options are based on validating quorum within the cluster before returning a response to the client.  Quorum meaning that a majority of vnodes within a preflist must have provided acknowledged input to the transaction.  So although Riak offers a guarantee that data will be eventually consistent; within a single, stable cluster an application will still [read its own writes](https://jepsen.io/consistency/models/read-your-writes).  There are tunable consistency [properties in Riak](/docs/InstallAndStartGuide.md#configuration-of-riak---bucket-properties), that can be used to extend this guarantee to clusters during individual node failures.
+The default GET and PUT options are based on validating quorum within the cluster before returning a response to the client.  Quorum meaning that a majority of vnodes within a preflist must have provided acknowledged input to the transaction.  So although Riak offers a guarantee that data will be eventually consistent; within a single, stable cluster an application will still [read its own writes](https://jepsen.io/consistency/models/read-your-writes).  There are tunable consistency [properties in Riak](./InstallAndStartGuide.md#configuration-of-riak---bucket-properties), that can be used to extend this guarantee to clusters during individual node failures.
 
-> Quorum is the default for [the Object API](/docs/ObjectAPI.md), but not the default for [the Query API](/docs/QueryAPI.md).
+> Quorum is the default for [the Object API](./ObjectAPI.md), but not the default for [the Query API](./QueryAPI.md).
 
 All index updates within a vnode are transactional to the object change; so that in a single, stable cluster, queries will immediately reflect the latest update.  There is no post-update delay for indices to be updated. However queries have to be distributed across a covering set of primary vnodes, and this covering set will include a single replica of each object.  If a primary vnode is active but not up-to-date (i.e. due to a recent recovery from failure or corruption), query results are not validated by checking results between replicas.
 

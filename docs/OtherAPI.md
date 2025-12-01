@@ -143,7 +143,7 @@ Returns a list of buckets, assuming the given n_val.
 
 ### Performance and Efficiency
 
-The AAE Fold implementation has similarities to [the Query API](/docs/QueryAPI.md#performance-and-efficiency).  The sequence of operations for the fold is:
+The AAE Fold implementation has similarities to [the Query API](./QueryAPI.md#performance-and-efficiency).  The sequence of operations for the fold is:
 
 - On the local node that received the request, a query server is started to orchestrate the fold across the cluster;
   - In Riak 3.4 the query server has a different underlying implementation to the query server used in the Query API; but this may change to use a common implementation in a future release.
@@ -191,7 +191,7 @@ Some considerations on the efficiency of AAE Folds:
   - Use of a contiguous slice is more efficient than selecting random slices, as when checking Segments only the first 15 of the 20 bits (assuming standard tree size) in a segment ID are used.
   - When folds are used with Riak anti-entropy mechanisms, the `max_results` settings are used to control the size of the list of segment IDs passed into a fold.
 
-The AAE folds will scan over blocks of keys and metadata.  The performance of AAE fold requests are impacted by the volume of metadata per key, and the throughput per CPU core is likely to be lower than with the [Query API](/docs/QueryAPI.md#performance-and-efficiency) - where only blocks of index entities need to be scanned.  Unlike the Query API, none of the accumulators are required to deduplicate, so there is no related impact on performance.
+The AAE folds will scan over blocks of keys and metadata.  The performance of AAE fold requests are impacted by the volume of metadata per key, and the throughput per CPU core is likely to be lower than with the [Query API](./QueryAPI.md#performance-and-efficiency) - where only blocks of index entities need to be scanned.  Unlike the Query API, none of the accumulators are required to deduplicate, so there is no related impact on performance.
 
 Where a fold is returning a list of keys, or keys and clocks, it is necessary for the node coordinating the fold to hold the full result-set in memory; and on conclusion of the fold the results will need to be copied at least once to produce an API response.  The performance of the fold will also be impacted by an accumulator which grows with the number of entries covered.
 
@@ -312,7 +312,7 @@ Before using data-types, there are important caveats within the current implemen
   - The correct handling of failure of an individual request is not presently defined.
 - Riak is designed for the storing of many keys, where the load of object requests is spread roughly evenly across the key-space; this is also true for CRDTs.  Do not use individual counters, for example a single hit counter for an application, that may create a __hot__ key that is accessed much more frequently than other keys.
 - Both sets and maps have specific constraints in Riak 3.4 where the growth of components within an object is not handled efficiently.
-- There is no in-built support for querying data within data-types, the Data Type API is incompatible with the [Query API](/docs/QueryAPI.md).
+- There is no in-built support for querying data within data-types, the Data Type API is incompatible with the [Query API](./QueryAPI.md).
 
 > The approach to supporting data types is expected to be evolved significantly in future Riak releases; which may result in significant changes to both sets and maps, and change the use of those data types in future releases.
 
@@ -322,7 +322,7 @@ The use of Map/Reduce API is deprecated in Riak 3.4, and the API will be retired
 
 For using Map/Reduce with Erlang functions, the API is unchanged since Riak 2.2.3, so refer to the [legacy documentation](https://docs.riak.com/riak/kv/2.2.3/developing/app-guide/advanced-mapreduce/index.html) for further information.  The Map/Reduce API no longer supports JavaScript functions.
 
-> For querying data the [Query API](/docs/QueryAPI.md) should be used in preference to the Map/Reduce API.  The Query API is under active development to expand the number of Map/Reduce use cases it covers, in particular the ability to prompt the fetching of multiple objects.
+> For querying data the [Query API](./QueryAPI.md) should be used in preference to the Map/Reduce API.  The Query API is under active development to expand the number of Map/Reduce use cases it covers, in particular the ability to prompt the fetching of multiple objects.
 
 ## The List API
 
@@ -334,7 +334,7 @@ The APIs are unchanged since Riak 2.2.3, so refer to the legacy documentation fo
 
 ## Legacy Query API
 
-Prior to the introduction of the [Riak Query API](/docs/QueryAPI.md), there existed a simple REST-based API for querying index entries in Riak.  This API is deprecated, use of the Query API is preferred to support new queries.
+Prior to the introduction of the [Riak Query API](./QueryAPI.md), there existed a simple REST-based API for querying index entries in Riak.  This API is deprecated, use of the Query API is preferred to support new queries.
 
 The binary secondary indexes supported by the legacy index queries, are compatible with the new Query API - anything that could be queried and filtered in the old API can be achieved using the expressions in the new API.
 
@@ -346,7 +346,7 @@ The functionality of the legacy query API is unchanged since Riak 2.2.3, so refe
 
 The use of the strong consistency API is deprecated in Riak 3.4, and the API will be retired in Riak 4.0.
 
-From Riak 4.0, Riak will only have support for eventual consistency, but protection for conflicts can be improved through [conditional PUTs with token-based consensus](/docs/ObjectAPI.md#conditional-requests).
+From Riak 4.0, Riak will only have support for eventual consistency, but protection for conflicts can be improved through [conditional PUTs with token-based consensus](./ObjectAPI.md#conditional-requests).
 
 The functionality of Strong Consistency is unchanged since Riak 2.2.3, so refer to the [legacy documentation](https://docs.riak.com/riak/kv/2.2.3/developing/app-guide/strong-consistency/index.html) for further information.
 

@@ -94,7 +94,7 @@ Riak is partition tolerant, in that during partition events data can still be st
 
 If there are weaknesses in resilience in the network architecture, then that resilience should be reflected in the configuration of locations.  For example, if nodes are only connected to a single network switch, then all nodes on the same switch should be configured to be in the same location.
 
-In assessing the bandwidth needs of Riak deployments, the flow of requests using [the Object API](/docs/ObjectAPI.md) should be considered:
+In assessing the bandwidth needs of Riak deployments, the flow of requests using [the Object API](./ObjectAPI.md) should be considered:
 
 - For every GET from Riak, the value will normally be fetched once within the cluster (the majority of the time from within the same location) generating an intra-cluster network bandwidth requirement.
 - For every PUT the value will normally be sent three times within the cluster.  Between replicating clusters GETs do not create network bandwidth needs, but each PUT requires a single transfer of the value.
@@ -197,7 +197,7 @@ As well as the pending changes, there are four inputs to that planning process:
 - The `target_n_val`; which should be greater than or equal to the `n_val`.
   - If this is set to the `n_val` this will simply guarantee that all primary locations for an object will be on separate nodes.
   - If this is set to `n_val + N`, then even after `N` failures each the object will still be stored on separate nodes.
-  - The `target_n_val` is the number of [primaries and fallbacks](/docs/RiakTheoryGuide.md#the-ring---the-distribution-of-vnodes) which must be on distinct nodes.
+  - The `target_n_val` is the number of [primaries and fallbacks](./RiakTheoryGuide.md#the-ring---the-distribution-of-vnodes) which must be on distinct nodes.
 - The `target_location_n_val`; which defaults to `target_n_val` minus one, but the supportable value will depend greatly on the number of locations and how evenly the nodes are spread across those locations.
   - The higher the `target_location_n_val`, and the `target_n_val` the more certain the availability of data in the cluster is.
   - For experimenting with checking the validity of larger settings, there is an offline [ring calculator](https://github.com/OpenRiak/ring_calculator) which may be used before planning a cluster expansion.

@@ -45,7 +45,7 @@ Internally within Riak all three elements are binary identifiers,  With the Obje
 
 > Although it is possible to use non-URL-safe identifiers using the Protocol Buffer API, it is important not to do so - as any object using a non-URL safe identifier will not be accessible via the HTTP API, as there is no encoding of non-Alphanumeric identifier parts.
 
-The [Bucket Type](/docs/InstallAndStartGuide.md#configuration-of-riak---bucket-properties) is used to describe the properties of the object.  Properties are associated with a Bucket Type, and all Objects in the Buckets under that type will inherit those properties. The Bucket is a namespace, and a Bucket Type is allowed to have an arbitrary number of Buckets.  A Bucket cannot be moved between Bucket Types, but the properties of an individual Bucket may be changed to override that of the Bucket Type.  Keys are unique identifiers of an object within a Bucket.
+The [Bucket Type](./InstallAndStartGuide.md#configuration-of-riak---bucket-properties) is used to describe the properties of the object.  Properties are associated with a Bucket Type, and all Objects in the Buckets under that type will inherit those properties. The Bucket is a namespace, and a Bucket Type is allowed to have an arbitrary number of Buckets.  A Bucket cannot be moved between Bucket Types, but the properties of an individual Bucket may be changed to override that of the Bucket Type.  Keys are unique identifiers of an object within a Bucket.
 
 A Bucket Type cannot be used via the API until it has been created and activated, to do this see:
 
@@ -63,7 +63,7 @@ Riak is not optimised for small values, although there is no lower limit to the 
 
 > Typically values stored in Riak are between o(1KB) and o(1MB) in size, but are not constrained by these limits.
 
-To Riak object values are generally opaque, but Riak does have support for [data-types](/docs/OtherAPI.md#the-data-type-api); specially formatted values where the handling of conflict is deterministic and managed within the database, so the application does not see siblings even though [`allow_mult` is set to `true`](/docs/InstallAndStartGuide.md#property---allow_mult).
+To Riak object values are generally opaque, but Riak does have support for [data-types](./OtherAPI.md#the-data-type-api); specially formatted values where the handling of conflict is deterministic and managed within the database, so the application does not see siblings even though [`allow_mult` is set to `true`](./InstallAndStartGuide.md#property---allow_mult).
 
 ## Object Meta Content - the request and response headers
 
@@ -76,9 +76,9 @@ There are four object components that make use of HTTP headers:
 
 ### Version Vector
 
-The Riak [version vector](/docs/RiakTheoryGuide.md#version-vectors) is relevant to the database, but generally opaque to the application.  The application should read the version vector (which will be presented base64 encoded), and present the read version vector when updating an object.  The application does not need to understand the contents of the version vector.
+The Riak [version vector](./RiakTheoryGuide.md#version-vectors) is relevant to the database, but generally opaque to the application.  The application should read the version vector (which will be presented base64 encoded), and present the read version vector when updating an object.  The application does not need to understand the contents of the version vector.
 
-The version vector is referred to in the API as a `vector clock` (or `vclock`).  This vector is used internally within Riak to track which content is most up-to-date - to differentiate between content that is superseded (i.e. where an update had seen the content) or genuinely concurrent (the writes were made in parallel).  Parallel writes will lead to unresolvable conflict, and how this is handled is defined within the [bucket properties](/docs/InstallAndStartGuide.md#property---allow_mult).
+The version vector is referred to in the API as a `vector clock` (or `vclock`).  This vector is used internally within Riak to track which content is most up-to-date - to differentiate between content that is superseded (i.e. where an update had seen the content) or genuinely concurrent (the writes were made in parallel).  Parallel writes will lead to unresolvable conflict, and how this is handled is defined within the [bucket properties](./InstallAndStartGuide.md#property---allow_mult).
 
 ### User Metadata
 
@@ -108,7 +108,7 @@ If an object results in an unresolved conflict, the index entries for the object
 
 The GET and PUT API allow for options to be passed in the HTTP API via [HTTP query parameters appended to the URI](https://www.rfc-editor.org/rfc/rfc3986#section-3.4).
 
-It is recommended that the options supported in the Object API should be set via [bucket properties](/docs/InstallAndStartGuide.md#configuration-of-riak---bucket-properties) wherever possible (except where the option is a per-request option rather than a property e.g. `vtag`).  It is best practice to define the expectations for managing a request within the properties of the type, and only use options to override those definitions.
+It is recommended that the options supported in the Object API should be set via [bucket properties](./InstallAndStartGuide.md#configuration-of-riak---bucket-properties) wherever possible (except where the option is a per-request option rather than a property e.g. `vtag`).  It is best practice to define the expectations for managing a request within the properties of the type, and only use options to override those definitions.
 
 The most common options used are:
 
@@ -197,7 +197,7 @@ Supported HTTP request headers for PUT:
 - `x-riak-vclock`; should be provided when mutating existing objects, should be the contents of the object read prior to update.
 - `x-riak-if_not_modified`; optional, for conditional requests.
 - `if_none-match: *`; optional, for conditional requests.
-- `authorization`; optional, for tls-protected requests only when [Riak security is enabled](/docs/OperationsAndTroubleshootingGuide.md#enabling-riak-security).
+- `authorization`; optional, for tls-protected requests only when [Riak security is enabled](./OperationsAndTroubleshootingGuide.md#enabling-riak-security).
 - `x-riak-meta-<key>: <value>`; optional, multiple keys may be provided, and will be mapped to user metadata.
 - `x-riak-index-<field> : <value1>, <value2>`; optional add multiple index fields, with multiple values in each field where those values are comma (and whitespace) separated.  Index fields should have the suffix `_bin` or `_int`.
 - `content-type: <content_type>`; optional, specify the content-type of the value to be stored, to be provided in response to future GET requests.
@@ -222,7 +222,7 @@ When using the HEAD method the request will still result in the object value bei
 
 Supported HTTP request headers for GET:
 
-- `authorization`; optional, for tls-protected requests only when [Riak security is enabled](/docs/OperationsAndTroubleshootingGuide.md#enabling-riak-security).
+- `authorization`; optional, for tls-protected requests only when [Riak security is enabled](./OperationsAndTroubleshootingGuide.md#enabling-riak-security).
 - `accept: multipart/mixed`; optional, will cause results in a conflicted state to return all siblings as one multipart-mime object body.  Without this option a list of sibling vtags will be returned, and each `vtag` may be fetched using the `vtag=<vtag>` query parameter in the URL.
 
 Expected HTTP response headers for GET:

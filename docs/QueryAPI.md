@@ -30,7 +30,7 @@ For further detail on the Query API:
 
 Querying in Riak is based around secondary indexes.  A Riak secondary index entry is a combination of a field, a term and an object key: where a field is a name for an index within a bucket, and a term is a sortable binary string that represents a value for a given key on that index, and the object key is the standard result of the query.  All indexes and queries are limited to the scope of a single Bucket.
 
-Indexes are added using [the Object API](/docs/ObjectAPI.md#index-entries).
+Indexes are added using [the Object API](./ObjectAPI.md#index-entries).
 
 - When an object is PUT into Riak, the PUT should include ALL the index entries for that object - the entirety of the current expected state.  Internally Riak will calculate the delta from the previously stored index entries, and only make the necessary key changes.
 - An individual object can have an unlimited number of index entries in total, and an unlimited number of terms on any given field.
@@ -58,7 +58,7 @@ The Query API is intended to provide flexible and performant functionality in th
 
 > The aim of Riak development is to provide a database that performs efficient, scalable and predictable CRUD operations, and is just-queryable-enough to avoid the need of third party database integration in most use cases.
 
-Riak does support via [an external replication API](/docs/NextGenReplGuide.md), the ability to manage replication and reconciliation to third party query engines (e.g. OpenSearch), should more complex query support be required.  The automation of such integration is outside of the current functional scope of Riak.
+Riak does support via [an external replication API](./NextGenReplGuide.md), the ability to manage replication and reconciliation to third party query engines (e.g. OpenSearch), should more complex query support be required.  The automation of such integration is outside of the current functional scope of Riak.
 
 ### Querying - Functional Summary
 
@@ -69,7 +69,7 @@ A query consists of the [following components](#query_list-required):
 - An `evaluation_expression` (optional); used to decode projected attributes to provide a map of those attributes to be processed via a filter expression.
 - A `filter_expression` (optional); used to filter results in/out of queries by applying checks to a map of projected attributes discovered on the index entry (i.e. the map being the output of an evaluation expression).
 - A `regular_expression` (optional); a potentially less flexible, but sometimes more performant alternative to evaluation and filter expressions - where a regular expression is used to match against a whole term, including the unevaluated projected attributes, in order to filter the entry into the query results.
-  - The regular expression is primarily provided for backwards compatibility with the [legacy index-query feature used prior to Riak 3.4](/docs/OtherAPI.md#legacy-query-api).  The use of evaluation and filter expressions is preferred to the use of regular expressions, and are often at least as performant as regular expressions.
+  - The regular expression is primarily provided for backwards compatibility with the [legacy index-query feature used prior to Riak 3.4](./OtherAPI.md#legacy-query-api).  The use of evaluation and filter expressions is preferred to the use of regular expressions, and are often at least as performant as regular expressions.
   - Regular expressions are [PCRE-style regular expressions](https://www.pcre.org/), but are not compiled prior to being used.
   - Escaping regular expressions correctly, so that they can be passed via the JSON-based Query API, may add significant complexity to the development process.
 

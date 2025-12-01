@@ -122,16 +122,16 @@ Each individual schema component can be found in the `priv` folder for that repo
 
 When starting a first cluster to experiment, the following configuration items are of particular importance:
 
-- `ring_size`; refer to the [ring size selection in the design decisions document](/docs/InitialDesignDecisions.md#ring-size), should be set smaller than the default for test/dev environments and larger than the default for production systems.
-- `tictacaae_active`; refer to the [intra-cluster resilience in the design decisions document](/docs/InitialDesignDecisions.md#intra-cluster-data-resilience).  Should be set to active if the active repair of deltas between vnodes is required, otherwise repair will be reactive (i.e. only once a delta has been detected on read).
+- `ring_size`; refer to the [ring size selection in the design decisions document](./InitialDesignDecisions.md#ring-size), should be set smaller than the default for test/dev environments and larger than the default for production systems.
+- `tictacaae_active`; refer to the [intra-cluster resilience in the design decisions document](./InitialDesignDecisions.md#intra-cluster-data-resilience).  Should be set to active if the active repair of deltas between vnodes is required, otherwise repair will be reactive (i.e. only once a delta has been detected on read).
 - `tictacaae_storeheads`; should be enabled when using `tictacaae_active` on a leveled backend if the full scope of AAE Folds are to be used.
 - `anti_entropy`; this is a deprecated anti-entropy system, and should be set to `passive` if using `tictacaae_active`.  It may be set to `active` in parallel to `tictacaae_active` to transition between the services.  The legacy anti-entropy system is quicker and more aggressive at repairing deltas, but offers less functionality and runs at a higher cost when in sync.
-- `storage_backend`; refer to the [backend selection in the design decisions document](/docs/InitialDesignDecisions.md#database-backend), but for full Riak functionality must be set to leveled.
+- `storage_backend`; refer to the [backend selection in the design decisions document](./InitialDesignDecisions.md#database-backend), but for full Riak functionality must be set to leveled.
 - `read_repair_primaryonly`; will impact the behaviour in failure, by default when a standby vnode replaces a failed vnode, read repair will be triggered on every GET to populate the standby with old writes, but this will have a negative impact performance during both failure and recovery.
 - `buckets.default.merge_strategy`; should always be set to `2`, and `2` will be the only supported option from Riak 4.0.
 - `nodename`; a unique name for the node within the cluster.
 - `platform_data_dir`; where the actual data will be stored, must be a space with sufficient capacity and throughput.
-- `listener.http.internal` or `listener.pb.internal`; the IP address and port for accessing the API. It is recommended to bind this IP address to a specific interface address.  [The Query API](/docs/QueryAPI.md) requires use of the `http` listener, and performance will differ between the `pb` and `http` transports when using [the Object API](/docs/ObjectAPI.md).
+- `listener.http.internal` or `listener.pb.internal`; the IP address and port for accessing the API. It is recommended to bind this IP address to a specific interface address.  [The Query API](./QueryAPI.md) requires use of the `http` listener, and performance will differ between the `pb` and `http` transports when using [the Object API](./ObjectAPI.md).
 
 In a `riak.conf` file, the last setting of any configuration item is the actual value used in the configuration.  Edits to the riak.conf file don't have to change the configuration in place, defaults may be overwritten by concatenating changes to the end of the file.
 
@@ -146,7 +146,7 @@ Compression, decompression and compaction have a potentially significant impact 
 - `leveled.ledger_compression`; if `compression_method` is set to `none`, then compression should still be enabled here e.g. set to `zstd`.
   - the ledger does not store object values, but stores the object keys and metadata in blocks by key order.
   - it is recommended to use some form of compression on the ledger, even when all values are pre-compressed.  The ledger blocks are generally highly compressible, even when the values are not. 
-- `leveled.compaction_runs_perday`; refer to the [operations guide](/docs/OperationsAndTroubleshootingGuide.md#leveled-compaction-highlow-hour) for more on leveled compaction.
+- `leveled.compaction_runs_perday`; refer to the [operations guide](./OperationsAndTroubleshootingGuide.md#leveled-compaction-highlow-hour) for more on leveled compaction.
 
 The leveled logs are relatively verbose, when compared to log activity across Riak as a whole.  These logs can be tuned using:
 
@@ -158,7 +158,7 @@ There are a number of configurable options within the bitcask backend, that can 
 
 Configuration items of notable importance are:
 
-- `bitcask.merge_policy`; refer to the [operations guide](/docs/OperationsAndTroubleshootingGuide.md#bitcask-merge-window) for more on bitcask compaction.
+- `bitcask.merge_policy`; refer to the [operations guide](./OperationsAndTroubleshootingGuide.md#bitcask-merge-window) for more on bitcask compaction.
 - `bitcask.io_mode`; should be set to `erlang`, careful consideration is required before moving to `nif`.
 
 ### Configuration of Riak - Delete Mode
@@ -203,7 +203,7 @@ Some changes can be applied using GET/PUT specific parameters, which will overri
 
 #### Property - dvv_enabled
 
-In Riak 2.0 the handling of siblings was improved by the enabling of dotted [version vectors](/docs/RiakTheoryGuide.md#version-vectors).  All buckets should use `{dvv_enabled, true}`.  The introduction of DVV did not force non-typed buckets to use DVV, and by default non-typed buckets will continue to use legacy vector clocks.
+In Riak 2.0 the handling of siblings was improved by the enabling of dotted [version vectors](./RiakTheoryGuide.md#version-vectors).  All buckets should use `{dvv_enabled, true}`.  The introduction of DVV did not force non-typed buckets to use DVV, and by default non-typed buckets will continue to use legacy vector clocks.
 
 To correct this the following configuration should be added to the `riak.conf`:  `buckets.default.merge_strategy = 2`.
 
@@ -221,7 +221,7 @@ The last_modified_date is a timestamp that depends on the accuracy of the clock 
 {: .note }
 > Due to the potential use of timestamps to make comparisons when using `{allow_mult, false}`, the use of reliable time sources to co-ordinate time within and across clusters is recommended.
 
-When using [conflict-free replicated data types](/docs/OtherAPI.md#the-data-type-api), `{allow_mult, true}` must always be used.
+When using [conflict-free replicated data types](./OtherAPI.md#the-data-type-api), `{allow_mult, true}` must always be used.
 
 Unless the non-existence of an object can be guaranteed by the application using Riak, it is recommended that applications always read before writing, and include the vector clock from the read in the write.  This ensures that even when using `{allow_mult, false}`, fallback to time comparison is kept to a minimum.
 
@@ -278,7 +278,7 @@ If replicating between clusters and `one` is used as the `sync_on_write` bucket 
 Available from Riak 3.4
 {: .label .label-purple }
 
-The `aae_tree_exclude` bucket property has a default value of `false` and allows for some flexibility when reconciling between clusters using nextgenrepl full-sync.  In general with Riak nextgenrepl it is assumed that clusters aim to contain the same data.  It is possible to replicate specific buckets between specific sources, and also possible to reconcile only individual buckets between clusters - but per-bucket reconciliation is not as efficient as full-cluster reconciliation.  The efficiency of full cluster reconciliation is based on the use of cached and mergeable [AAE (active anti-entropy) merkle trees](/docs/RiakTheoryGuide.md#anti-entropy) that represent all the data in the store.
+The `aae_tree_exclude` bucket property has a default value of `false` and allows for some flexibility when reconciling between clusters using nextgenrepl full-sync.  In general with Riak nextgenrepl it is assumed that clusters aim to contain the same data.  It is possible to replicate specific buckets between specific sources, and also possible to reconcile only individual buckets between clusters - but per-bucket reconciliation is not as efficient as full-cluster reconciliation.  The efficiency of full cluster reconciliation is based on the use of cached and mergeable [AAE (active anti-entropy) merkle trees](./RiakTheoryGuide.md#anti-entropy) that represent all the data in the store.
 
 The purpose of `aae_tree_exclude` is to not include the bucket in the cached tree, so that the bucket isn't considered in any all-data reconciliation jobs.  For example, this may help when:
 
@@ -289,7 +289,7 @@ If a bucket is configured to `{aae_tree_exclude, true}`, the keys are still visi
 
 The preferred long-term strategy for temporary objects is to use the eraser and reaper processes to garbage collect objects, rather than relying on backend TTL.  However when migrating from a multi-backend store with TTL-based backends, the migration should be easier if: those temporary buckets are excluded from aae trees, are replicated separately using range_repl, and reconciled using bucket-specific aae full-sync jobs.
 
-The `aae_tree_exclude` bucket property may be cached by processes within a cluster, so changing the property will not have immediate effect.  A change to the `aae_tree_exclude` property should be coordinated with a [rolling restart](/docs/OperationsAndTroubleshootingGuide.md#rolling-restart).
+The `aae_tree_exclude` bucket property may be cached by processes within a cluster, so changing the property will not have immediate effect.  A change to the `aae_tree_exclude` property should be coordinated with a [rolling restart](./OperationsAndTroubleshootingGuide.md#rolling-restart).
 
 #### Property - small_vclock
 
@@ -309,7 +309,7 @@ It is recommended to set `notfound_ok` to `false`, so that a vnode with a missin
 
 The `pr` and `pw` bucket properties default to `0`, and are used to require primary vnodes to be involved in reads and writes.  Setting higher values may prevent writing to minority partitions, however when `{n_val, 3}` this will probably lead to intermittent failures when only two nodes fail in a cluster.  As clusters grow the probability of two concurrent failures will increase significantly.
 
-Although configuring `pr`/`pw` to values greater than 1 may be used to indirectly set stronger data reliability guarantees, or to adjust consistency guarantees - there are better ways of achieving this in Riak, which have fewer negative side effects.  Consider using [`node_confirms`](#property---node_confirms) or [`sync_on_write`](#property---sync_on_write) to manage data reliability.  The use of [token-based conditional PUTs](/docs/ObjectAPI.md#conditional-requests) is the preferred approach, rather than `pr`/`pw` adjustments for tuning consistency.
+Although configuring `pr`/`pw` to values greater than 1 may be used to indirectly set stronger data reliability guarantees, or to adjust consistency guarantees - there are better ways of achieving this in Riak, which have fewer negative side effects.  Consider using [`node_confirms`](#property---node_confirms) or [`sync_on_write`](#property---sync_on_write) to manage data reliability.  The use of [token-based conditional PUTs](./ObjectAPI.md#conditional-requests) is the preferred approach, rather than `pr`/`pw` adjustments for tuning consistency.
 
 {: .note }
 > It is normally best practice to configure either `{pr, 1}` or `{notfound_ok, false}`, rather than rely on defaults.
