@@ -1,9 +1,9 @@
 ---
-title: OpenRiak Riak Key-Value Store
+title: OpenRiak Riak
 layout: home
 ---
 
-# OpenRiak Riak Key-Value Store
+# OpenRiak Riak
 
 Riak is a distributed key-value store, designed to provide high-availability with predictable response times in the presence of complex failure scenarios. It can be configured to provide assurance against data loss, even where individual nodes have ephemeral storage, and groups of nodes can be concurrently impacted by failure events. It is a reliable system whilst running on simple, low-cost, commodity components - remaining highly available without the need for urgent operator intervention.
 
@@ -15,14 +15,3 @@ Riak users have been running large-scale production databases in mission-critica
 
 Riak is built almost entirely using BEAM technology, a platform designed from the start to support the next generation of reliable systems. Over the past few years Riak has been evolved to make better use of the BEAM platform, and is now supported on an ongoing basis by a Working Group of the Erlang Ecosystem Foundation.
 
-For further information, browse Riak QuickDocs
-
-- [Initial Design Decisions](./InitialDesignDecisions.md)
-- [Install and Start](./InstallAndStartGuide.md)
-- [Build and Scale a Cluster](./BuildAndScaleClusterGuide.md)
-- [Object API](./ObjectAPI.md)
-- [Query API](./QueryAPI.md)
-- [Other APIs](./OtherAPI.md)
-- [Replication and Reconciliation](./ReplicationGuide.md)
-- [Operations and Troubleshooting](./OperationsAndTroubleshootingGuide.md)
-- [Riak Theory](./RiakTheoryGuide.md)

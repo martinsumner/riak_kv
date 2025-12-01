@@ -4,5 +4,12 @@ theme: just-the-docs
 
 url: https://martinsumner.github.io/riak_kv/
 
+defaults:
+  - scope:
+      path: "docs" # an empty string here means all files in the project
+      type: "pages"
+    values:
+      layout: "default"
+
 aux_links:
-  Template Repository: https://github.com/just-the-docs/just-the-docs-template
+  OpenRiak: https://github.com/OpenRiak
