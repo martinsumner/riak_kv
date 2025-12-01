@@ -1,9 +1,10 @@
 ---
-title: OpenRiak Riak KV
+title: Introduction
+nav_order: 0
 layout: home
 ---
 
-# Riak by OpenRiak
+# Riak by OpenRiak - An Introduction
 
 Riak is a distributed key-value store, designed to provide high-availability with predictable response times in the presence of complex failure scenarios. It can be configured to provide assurance against data loss, even where individual nodes have ephemeral storage, and groups of nodes can be concurrently impacted by failure events. It is a reliable system whilst running on simple, low-cost, commodity components - remaining highly available without the need for urgent operator intervention.
 

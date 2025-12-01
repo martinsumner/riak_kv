@@ -19,6 +19,7 @@ The initial design decisions are split into the following categories:
 
 It is not always possible to get all decisions correct first-time in the design phase.  Each choice has supporting guidance and how to transition to an alternative configuration.
 
+{: .highlight }
 > Riak clusters commonly run for decades, dealing with significant functional and non-functional changes in applications during their lifespan.
 
 ## Database backend
@@ -35,6 +36,7 @@ The following choices exist:
 - in-memory (deprecated as of Riak 3.4)
 - **multi-backend** (supported only in limited use cases, specifically as a multi-bitcask backend)
 
+{: .highlight }
 > In most common deployment scenarios, the best choice when the full functionality of Riak is required, is to use the leveled backend.
 
 The bitcask backend may be used, especially if
@@ -46,6 +48,7 @@ The bitcask backend may be used, especially if
 
 Sometimes, even in those situations, the leveled backend may be more efficient at present. There are ongoing plans within the OpenRiak community to continue to invest in bitcask improvements, and there are pending changes which have been shown to improve Riak/bitcask performance by 30% to 50% in some use cases.
 
+{: .note }
 > The bitcask backend is the preferred long-term solution for immutable, unsorted, data storage in Riak.
 
 Use of multi-backend should generally be avoided, unless as a mulit-bitcask backend (e.g. for tiered storage).  It may also be used to manage multiple expiry schedules across multiple bitcask backends through the backend TTL support; but not if anti-entropy requirements exist beyond read-repair or if inter-cluster reconciliation is required.  In these cases managing expiry [through the use of the eraser process is preferred](#deleting-data).
@@ -119,6 +122,7 @@ Testing of Riak is focused on single-backend solutions, but multi-backend (bitca
 
 The database backend configuration is local to a node.  Migrating the database backend will require a [rolling replacement](/docs/OperationsAndTroubleshootingGuide.md#rolling-replacement) of one or more nodes at a time.  For example, a multi-backend configuration with bitcask and in-memory backends and parallel-mode Tictac AAE, can be upgraded to a single leveled backend with native Tictac AAE (assuming the TTL capability requirement is not being utilised).
 
+{: .note }
 > A rolling replacement is a safe and reliable process even when a cluster is under application load; although it would be normal to schedule the process over a number of days in a large-scale production Riak cluster
 
 Where different backends support different cluster-wide features (e.g. support of the [Riak Query API](/docs/QueryAPI.md)), then the feature will only be usable when all nodes have updated.
@@ -141,6 +145,7 @@ Starting with a smaller ring size is helpful as:
 - There is a lower per-node memory footprint (with the leveled backend) if the vnode count per node is lower - although that footprint can be addressed through other means (e.g. reducing the `penciller_cache_size`).
 - Background database activity is split by vnode, so decreasing the number of vnodes reduces the overall volume of such activity.
 
+{: .note }
 > A ring size of `512` is a reasonable starting configuration for production clusters; unless there is a short-term goal to scale to much more than 1 billion objects.
 
 A ring-size of `16` is a reasonable starting configuration for a single-node non-production Riak system; unless there is a short-term goal to scale-up the use of a high number of CPU cores on the node.
@@ -151,6 +156,7 @@ Once a Ring Size is set, there is no way of updating a cluster in-place.  Howeve
 
 > TODO - add link to the cluster migration approach
 
+{: .note }
 > In environments where the capital cost of hardware is low (e.g. cloud environments), then using cluster migrations to evolve cluster configuration is relatively common.  A cluster migration process requires significant elapsed time, potentially taking multiple days - but is a safe and reliable process, even when a cluster is under application load.
 
 ## Intra-cluster data resilience
@@ -174,12 +180,14 @@ There are three configurable elements that control the resilience of the data di
 - `target_n_val`; the target for the distribution guarantee.  The `target_n_val` should always be consistently defined across nodes within a cluster.  The default setting is 4.  If the target is equal to the n_val, then all copies of the data stored within Riak in a healthy cluster will be guaranteed to be on separate nodes. If the target is greater than the n_val, then the integer difference represents how many failures can be tolerated before the guarantee is put at risk.
 - `target_location_n_val`; the target for the distribution guarantee from the perspective of locations not nodes.  The `target_location_n_val` should always be consistently defined across nodes. This is normally set to 3.  When a `target_location_n_val` and `target_n_val` are both configured then the cluster change process will attempt to uphold both guarantees.
 
+{: .highlight }
 > The use of locations is optional within Riak, but may be useful even when the infrastructure has no physical distinction between nodes; as locations can also be used as a method for defining maintenance groups.  Maintenance groups are collections of nodes within a cluster which can be stopped or changed concurrently, as the loss of the whole group will only lead to the loss of one copy of the data.
 
 The target `n_val` settings are used by the cluster claim algorithm, which is invoked [whenever a cluster change is planned](/docs/BuildAndScaleClusterGuide.md#join-process---plan-a-change) (e.g. joining or leaving a node), to redistribute the vnodes around the cluster where required.  There are three usable versions of the cluster claim algorithm - versions 2, 3 and 4.  To use both `target_location_n_val` and `target_n_val` the cluster claim algorithm should be changed from version 2 (the default) to version 4.  
 
 To discover what combinations may be supported given a cluster (given a count of nodes and distribution of nodes around locations), then the [offline ring calculator](https://github.com/OpenRiak/ring_calculator) may be used, to test settings before planning them with version 4 of the algorithm.  The bigger the `target_n_val` and `target_location_n_val` chosen, the more efficient and resilient the eventual cluster setup will be.
 
+{: .warning }
 > Failure to meet targets during cluster claim will lead to visual warnings when cluster change operations are requested - but not to failures.  If visual warnings are returned the ring calculator can be used to determine a supportable combination of settings.
 
 #### Proactive reconciliation
@@ -260,6 +268,7 @@ The `immediate` configuration ignores the risk of deletion, and does not use tom
 
 It is also possible to manage deletion through the use of a Time To Live.  However, using TTL is impractical when also using anti-entropy, and so this is not recommended unless there is permanent intention never to use anti-entropy or the related services (e.g. inter-cluster reconciliation).
 
+{: .note }
 > TTL and anti-entropy will be partially supported as of Riak 3.4 on a per-bucket basis in-conjunction with the [`aae_tree_exclude` bucket property](/docs/InstallAndStartGuide.md#property---aae_tree_exclude)  - so that the disadvantages of not having anti-entropy are limited to those buckets with TTLs.  It is expected that this will be used for buckets which are specifically expected to be short-lived, and not requiring full reliability against data loss i.e. it is expected to be used for exceptional cases within a database, not as a general answer to deletion.
 
 Through operational scheduling of [AAE folds](/docs/OtherAPI.md#aae-fold-api), erase and reap jobs can be combined to clear old data, per-bucket, based on the last modified date of the object.  This approach is recommended in preference to the use of TTL, to allow for garbage collection of expired objects.
@@ -290,4 +299,5 @@ The most important design decision is how to map the data requirements in an app
 
 Riak is designed to be agnostic to the format of the data, the schema belongs to the application and not the database.  It is therefore necessary to plan for schema migration within the application - detecting the schema version for an object, finding objects within a given schema version, updating a schema version in parallel to other application activity.
 
+{: .note }
 > It is recommended to plan for a lazy migration strategy, whereby the application can roll forward each object to the latest version on GET, without necessarily updating the persisted version, and then only updating the schema for the object on update.  With a lazy migration strategy, at the point of change only freshly updated objects will change.  Eventually all objects may need to be changed, and planning for a batch process to touch all objects not updated since the migration point will be required.
