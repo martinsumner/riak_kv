@@ -227,8 +227,8 @@ The v3 claim algorithm which tries to find an optimal solution through a series 
 The v3 algorithm does not support locations, and is considered an experimental feature, but is still in use in large scale production systems.
 
 #### Join process - `choose_claim_v4` (recommended)
-
 {: .d-inline-block }
+
 Available from Riak 3.0.16
 {: .label .label-green }
 
