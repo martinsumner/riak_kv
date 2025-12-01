@@ -47,7 +47,7 @@ When choosing server hardware or instance types, the following guidance should b
 
 Riak nodes may fail suddenly if space constraints are breached - i.e. available disk space, memory and at open file limits (very large clusters may require ulimit settings of 1M or more).  There is no management of activity to prevent breaches when close to these limits.
 
-{ .warning }
+{: .warning }
 > It is critical to monitor against space limits and have additional nodes available, and scale out the cluster by adding nodes should breaching space limits become a threat.  As load is distributed evenly across nodes, space constraints may be hit concurrently on multiple nodes.
 
 Riak spreads load evenly through the cluster, data is sharded across individual vnodes by consistent hashing, and vnodes are allocated to nodes so that each node will have either X or X + 1 vnodes.  All nodes should therefore have, wherever possible, equal capacity:
