@@ -55,7 +55,7 @@ A proactive replace is a cluster administration change, and [follows the standar
 
 The plan should be planned, reviewed, committed and then monitored as with other changes.
 
-The node may have its `location` set prior to the `join`, but the location will be ignored by the `replace` i.e. if the replacement node is in a different location to the existing node, this will not be factored in - the replace will transfer all vnodes to the new node, regardless of the `target_location_n_val` constraint.  Staging a location change after the `replace` has completed (i.e. following the `commit` and the transfers), may be used to `plan` a reshuffle of the cluster as a separate change activity.
+The node cannot have its `location` set prior to the `join`, as the location will be ignored by the `replace` i.e. if the replacement node is in a different location to the existing node, this will not be factored in - the replace will transfer all vnodes to the new node, regardless of the `target_location_n_val` constraint.  Staging a location change after the `replace` has completed (i.e. following the `commit` and the transfers), may be used to `plan` a reshuffle of the cluster as a separate change activity.
 
 See `riak admin cluster --help` for further details on the required inputs to cluster change commands.
 

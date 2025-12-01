@@ -234,7 +234,16 @@ Available from Riak 3.0.16
 
 The v4 algorithm is a brute-force algorithm which will attempt to solve a sufficient answer, potentially by exhausting all possibilities.  The v4 algorithm is the only effective algorithm for handling locations.  Because it seeks a sufficient answer, rather than an optimal one, the offline `ring_calculator` can be used to determine how far the target inputs can be pushed and still have a viable solution, before running the plan.
 
-Due to the length of time the brute-force algorithm may take, the `plan` command may timeout - however work in progress is cached, so re-running the plan after a short wait should return a plan in a timely manner, as the previous calculations will be reused.
+Due to the length of time the brute-force algorithm may take, the `plan` command may timeout.  However workings cached (but not the actual plan), so re-running the plan after a short wait should return a plan in a timely manner, as the previous calculations will be reused.
+
+When using locations, nodes must be assigned to locations before making the plan:
+
+```console
+riak admin cluster location --help
+```
+
+{: .note }
+> Nodes must have their location configured prior to requesting a plan.  If a plan includes a `replace`, the location cannot be set (as the claim algorithm must ignore location in a replacement).
 
 ### Join process - verify the plan
 
