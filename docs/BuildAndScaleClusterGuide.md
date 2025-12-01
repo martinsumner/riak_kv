@@ -186,11 +186,11 @@ riak admin cluster --help
 
 The process of joining, is a five stage process:
 
-- staging changes;
-- plan the change;
-- verify the plan;
-- commit the change;
-- await handoffs.
+- [staging changes](#join-process---staging-a-change);
+- [plan the change](#join-process---plan-a-change);
+- [verify the plan](#join-process---verify-the-plan);
+- [commit the change](#join-process---commit-the-plan);
+- [await handoffs](#join-process---await-handoffs).
 
 ### Join process - staging a change
 

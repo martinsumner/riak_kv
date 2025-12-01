@@ -174,13 +174,14 @@ Riak upgrades are all designed to support in-place rolling upgrades across the c
 
 The following upgrade path has been specifically tested:
 
-2.2.3 -> 2.2.5 -> 2.9.n -> 3.0.n -> 3.2.n -> 3.4.n
+`2.2.3` -> `2.2.5` -> `2.9.n` -> `3.0.n` -> `3.2.n` -> `3.4.n`
 
 More direct upgrade paths skipping steps may be possible.  New features are added using either a negotiation of capability within the cluster, or with the feature disabled by default in configuration.  Once a capability is mature, after at least two steps in the path, the negotiation may be retired and replaced with a static assumption of capability.
 
+{: .warning }
 > When using the eleveldb backend  with `snappy` compression (which is the default compression method when eleveldb is used in multi-backend setups), there are potentially multiple broken upgrade paths, even with minor release changes.  Double-check the release notes for issues before progressing with an update, and specific pre-live testing of any upgrade path is essential when using `snappy` compression.
 
-It is not possible via rolling restart to upgrade from an OTP version 22 or prior, to an upgrade with an OTP version of 25 or higher.  For example, direct upgrades from 3.0.n to 3.4.n are not supported unless 3.0.n is built with OTP 22, and 3.4.n is built with OTP 24.
+It is not possible via rolling restart to upgrade from an OTP version 22 or prior, to an upgrade with an OTP version of 25 or higher.  For example, direct upgrades from `3.0.n` to `3.4.n` are not supported unless `3.0.n` is built with OTP 22, and `3.4.n` is built with OTP 24.
 
 It is recommended to test all upgrades in pre-production environments.  If no pre-production environment is available, then a pilot node should be upgraded first in the cluster for an agreed time period (e.g. 24 hours).  If there are issues with the upgrade, then the pilot node can be stopped, cleared and [repaired](#reactive-replacement).  Most large-scale production users of Riak rely on pre-production testing or pilot nodes to assure changes, and do not depend on a [backup/restore safety net](#backup-options) during a rolling upgrade.
 
@@ -542,6 +543,7 @@ Monitoring of activity related to these issues is important.  Further, it is vit
   - Disk I/O operations (especially when I/O is limited by cloud providers).
   - Disk `await` times.
 
+{: .note }
 > The thresholds for monitoring may vary depending on operational speed with which new nodes can be procured, initialised and deployed to.
 
 Riak should be deployed into consistent environments using automation where possible:
