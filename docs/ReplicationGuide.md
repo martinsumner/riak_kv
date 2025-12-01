@@ -404,7 +404,8 @@ riak_kv_replrtq_snk:suspend_snkqueue(QueueName)
 riak_kv_replrtq_snk:resume_snkqueue(QueueName)
 ```
 
-> Riak will always be eventually consistent, any changes consumed by a sink node prior to joining will be transferred as part of the join; otherwise the reconciliation process will repair any deltas.
+{: .note }
+> Riak will always be eventually consistent, any changes consumed by a sink node prior to joining will be transferred as part of the join; and the reconciliation process will repair any other deltas.
 
 ### Monitoring reconciliation exchanges via logs
 

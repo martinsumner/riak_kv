@@ -279,6 +279,7 @@ Handling a forwarded PUT is marginally less expensive than coordinating a PUT.
 
 When a request is made to GET an object in Riak, the metadata (containing the vector of the version history) for that object is fetched from each vnode in the preflist.  The first vnode to respond is tasked with fetching the value, and the remaining responses are used to determine whether the fetched value represents the most recent version (and if it is it may be returned to the client as the response).  If a replacement (later) version is available, then that is fetched as the value instead.  If analysis of the version vector and the version of the values, cannot determine which value is up-to-date the full history of unreconciled values is returned as "siblings".
 
+{: .note }
 > As of Riak 3.4, the bitcask backend does not support the handling of HEAD requests.  Each vnode will respond to the original request with the whole object, and no race is invoked.  Support for HEAD requests is available only in the leveled backend.
 
 Handling the value fetch on vnode is an order of magnitude more expensive than simply handling the request for metadata.
