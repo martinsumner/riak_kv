@@ -17,12 +17,12 @@ Riak is built almost entirely using BEAM technology, a platform designed from th
 
 For further information, browse Riak QuickDocs
 
-- [Initial Design Decisions](/docs/InitialDesignDecisions.md)
-- [Install and Start](/docs/InstallAndStartGuide.md)
-- [Build and Scale a Cluster](/docs/BuildAndScaleClusterGuide.md)
-- [Object API](/docs/ObjectAPI.md)
-- [Query API](/docs//QueryAPI.md)
-- [Other APIs](/docs/OtherAPI.md)
-- [Replication and Reconciliation](/docs/ReplicationGuide.md)
-- [Operations and Troubleshooting](/docs/OperationsAndTroubleshootingGuide.md)
-- [Riak Theory](/docs/RiakTheoryGuide.md)
+- [Initial Design Decisions](./InitialDesignDecisions.md)
+- [Install and Start](./InstallAndStartGuide.md)
+- [Build and Scale a Cluster](./BuildAndScaleClusterGuide.md)
+- [Object API](./ObjectAPI.md)
+- [Query API](./QueryAPI.md)
+- [Other APIs](./OtherAPI.md)
+- [Replication and Reconciliation](./ReplicationGuide.md)
+- [Operations and Troubleshooting](./OperationsAndTroubleshootingGuide.md)
+- [Riak Theory](./RiakTheoryGuide.md)
