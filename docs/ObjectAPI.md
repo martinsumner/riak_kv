@@ -1,6 +1,7 @@
 ---
 title: Object API
 nav_order: 4
+layout : default
 ---
 
 # Riak KV - Object API

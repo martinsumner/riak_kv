@@ -1,6 +1,7 @@
 ---
 title: Query API
 nav_order: 5
+layout : default
 ---
 
 # Riak KV - Query API

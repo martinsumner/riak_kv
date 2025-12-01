@@ -1,3 +1,4 @@
+docs/_site
 .rebar/*
 .eunit/*
 deps/*

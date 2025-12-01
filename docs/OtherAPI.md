@@ -1,6 +1,7 @@
 ---
 title: Other APIs
 nav_order: 6
+layout : default
 ---
 
 # Riak KV - Other APIs

@@ -1,6 +1,7 @@
 ---
 title: Build and Scale a Cluster
 nav_order: 3
+layout : default
 ---
 
 # Riak KV - Building and Scaling a Cluster

@@ -1,6 +1,7 @@
 ---
 title: Replication and Reconciliation
 nav_order: 7
+layout : default
 ---
 
 # Riak KV - Replication and Reconciliation

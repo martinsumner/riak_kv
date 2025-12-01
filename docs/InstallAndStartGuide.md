@@ -1,6 +1,7 @@
 ---
 title: Install and Start
 nav_order: 2
+layout : default
 ---
 
 # Riak KV - Install and Start

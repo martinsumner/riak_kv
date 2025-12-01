@@ -1,6 +1,7 @@
 ---
 title: Riak Theory
 nav_order: 9
+layout : default
 ---
 
 # Riak KV - Theory Guide

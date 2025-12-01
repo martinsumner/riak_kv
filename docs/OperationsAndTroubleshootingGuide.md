@@ -1,6 +1,7 @@
 ---
 title: Operations and Troubleshooting
 nav_order: 8
+layout : default
 ---
 
 # Riak KV - Operations and Troubleshooting

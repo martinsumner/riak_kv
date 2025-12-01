@@ -1,6 +1,7 @@
 ---
 title: Initial Design Decisions
 nav_order: 1
+layout : default
 ---
 
 # Riak KV - Initial Design Decisions
