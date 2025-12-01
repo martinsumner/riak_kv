@@ -27,10 +27,10 @@ Riak can be potentially built on most Unix-flavour systems (including OSX for de
 
 Installation guides for different OTP versions are available via erlang.org:
 
-- https://www.erlang.org/docs/24/installation_guide/install;
-- https://www.erlang.org/docs/26/installation_guide/install.
+- [OTP 24 Installation Guide](https://www.erlang.org/docs/24/installation_guide/install);
+- [OTP 26 Installation Guide](https://www.erlang.org/docs/26/installation_guide/install).
 
-For convenience kerl may be used to simplify the installation of Erlang/OTP - https://github.com/kerl/kerl.
+For convenience `kerl` may be used to simplify the installation of Erlang/OTP - https://github.com/kerl/kerl.
 
 Some points to note when installing Erlang:
 
@@ -74,6 +74,7 @@ To generate a package, the run `make package` which will build a package for the
 
 ### Using pre-built packages
 
+{: .note }
 > The OpenRiak community currently provides Riak as **source-only**, and does not directly provide pre-built packages of Riak.
 
 Organisations within the OpenRiak community do offer pre-built packages as part of their service offering, and these are [freely available](https://files.tiot.jp/riak/).  The use of pre-built packages is _not_ recommended by the OpenRiak community where end-to-end assurance of the software supply-chain is required.  The building of packages in a customer-specific secure environment is the preferred approach.
@@ -84,17 +85,18 @@ Riak is deployed using [a modified version of the relx release generator](https:
 
 For locally deployed instances (i.e. via `make rel` or `make devrel`), can be controlled using the `bin/riak` script:
 
-```bash
+```console
 bin/riak daemon
 bin/riak ping
 bin/riak stop
 ``` 
 
+{: .note }
 > Note that `bin/riak start` is now deprecated, use `daemon` or `foreground` as appropriate.
 
 Help for further console activities can be found via:
 
-```bash
+```console
 bin/riak --help
 bin/riak admin --help
 bin/riak admin cluster --help
@@ -102,7 +104,7 @@ bin/riak admin cluster --help
 
 For instances deployed through packages, startup and shutdown should be controlled using `systemd` e.g.:
 
-```bash
+```console
 service riak start
 service riak ping
 service riak stop
@@ -161,7 +163,7 @@ Configuration items of notable importance are:
 
 ### Configuration of Riak - Delete Mode
 
-[TODO - Rather than write another section here, PR to make delete_mode configurable via riak.conf]
+> TODO - Rather than write another section here, PR to make delete_mode configurable via riak.conf
 
 ### Configuration of Riak - Bucket Properties
 
@@ -169,7 +171,7 @@ Riak objects are placed into buckets.  The configuration of the handling of buck
 
 For help in enabling properties on typed buckets see:
 
-```bash
+```console
 rel/riak/bin/riak admin bucket-type --help
 ```
 
@@ -189,12 +191,14 @@ Two pre-defined defaults changed with the introduction of typed buckets (the mer
 
 As any change made to `buckets.default.*` configuration in `riak.conf` is not inherited for typed buckets, there is no way of changing the defaults for typed buckets, so the operator is required to ensure that all default properties are manually set on every type.  For example if you wish to change the default n_val to 5 - this needs to be changed in riak.conf `buckets.default.n_val = 5` but ALSO the property `{n_val, 5}` has to be added on every single bucket type created.
 
+{: .note }
 > In general, setting bespoke bucket properties should be done using typed buckets due to the relative efficiency of the implementation with types, but changes to defaults should be considered very carefully.  Bespoke properties allow for bespoke behaviours, but bespoke behaviours add to the cognitive load of future operators.
 
 Default changes made via riak.conf need to be set consistently across a cluster.  No bucket properties are gossipped between clusters, so properties are cluster-specific.  In general any cluster setting related to vector clocks MUST be configured consistently across replicating clusters e.g. `dvv_enabled`, `old_vclock`, `young_vclock`, `big_vclock` and `small_vclock`.  Other properties can be different between clusters. 
 
 Some changes can be applied using GET/PUT specific parameters, which will override the default bucket property i.e. a bucket could be configured to use `{sync_on_write, one}`, but a specific PUT can override this by setting `{sync_on_write, all}`.
 
+{: .warning }
 > Although the use of GET/PUT specific parameters is supported on individual requests, it is not recommended.  Operation-specific parameters that override defaults are not logged, and can increase the operator-challenges associated with troubleshooting intermittent problems.
 
 #### Property - dvv_enabled
@@ -203,6 +207,7 @@ In Riak 2.0 the handling of siblings was improved by the enabling of dotted [ver
 
 To correct this the following configuration should be added to the `riak.conf`:  `buckets.default.merge_strategy = 2`.
 
+{: .warning }
 > If vector clock sizes are approaching the `small_vclock` limit, then it is important that `{dvv_enabled, true}` before pruning is applied, or pruning may lead to unexpected siblings.
 
 #### Property - allow_mult
@@ -213,6 +218,7 @@ The internal workings of Riak are identical for the two `allow_mult` settings, w
 
 The last_modified_date is a timestamp that depends on the accuracy of the clock on the node that processed the update request.  The timestamp is recorded to a microsecond level, although it is only visible to an accuracy of one second when read via the HTTP Object API.  If conflicting versions of the same object have matching timestamps, then an arbitrary choice is made, although there is a preference for changes with values over deletions.
 
+{: .note }
 > Due to the potential use of timestamps to make comparisons when using `{allow_mult, false}`, the use of reliable time sources to co-ordinate time within and across clusters is recommended.
 
 When using [conflict-free replicated data types](/docs/OtherAPI.md#the-data-type-api), `{allow_mult, true}` must always be used.
@@ -227,6 +233,7 @@ In general, the default of `false` should be used, even when `{allow_mult, false
 
 There is a small performance advantage from setting `{last_write_wins, true}` if, and only if: the bitcask backend is used, and objects are being updated and not simply inserted, and there is no use of TicTac AAE.
 
+{: .warning }
 > It is recommended that `{last_write_wins, true}` only be used for once-only PUTs (of immutable objects) into the bitcask backend, if and only if, the consequences of out-of-order writes have been fully considered.
 
 #### Property - n_val
@@ -241,12 +248,14 @@ Setting distinct `n_val`s on a per-bucket basis is not recommended, it is prefer
 
 The value of `1` is sometimes used in read-only clusters, to reduce storage costs in clusters used only for backups or offline-reporting.  The value of `5` may sometimes be used in very large clusters in terms of node count; either as the probability of concurrent failures requires higher redundancy, or because there is a need to improve the efficiency of secondary index queries.
 
+{: .warning }
 > Changing an n_val on a bucket which already contains data will have unexpected and untested consequences, especially when contracting the n_val.
 
 #### Property - node_confirms
 
 The `node_confirms` bucket property has a default value of `0`, and may be set to any non-negative integer less than or equal to the `n_val`.  The purpose of `node_confirms` is to offer a guarantee that the data is available on multiple machines, for example setting node_confirms to 2 will guarantee that at least two machines have the data - and the risk of the data being lost can be considered accordingly.
 
+{: .highlight }
 > By default, a request will be confirmed when the data is in a quorum of vnodes.  However, if multiple nodes have failed in the cluster, the data may still only be on one node. With `node_confirms` the request is only confirmed once the required physical diversity is supported, not just the logical diversity.
 
 The `node_confirms` property is applied on both reads and writes.  The parameter is also applied on reads so that an application can understand on read that a previous put has indeed reached the required level of diversity.  If a `PUT` request fails due to `node_confirms`, a successful `GET` is sufficient to confirm that through eventual consistency the required diversity has been achieved.
@@ -264,6 +273,9 @@ It is recommended not to use backend sync configuration, and instead control flu
 If replicating between clusters and `one` is used as the `sync_on_write` bucket property, then the cluster that receives the PUT from the application will flush to disk on one node - but all clusters receiving the PUT via replication will not be required to flush to disk on any node.  The properties of `backend` or `all` are treated equally in source and sink clusters.
 
 #### Property - aae_tree_exclude
+
+Available from Riak 3.4
+{: .label .label-purple }
 
 The `aae_tree_exclude` bucket property has a default value of `false` and allows for some flexibility when reconciling between clusters using nextgenrepl full-sync.  In general with Riak nextgenrepl it is assumed that clusters aim to contain the same data.  It is possible to replicate specific buckets between specific sources, and also possible to reconcile only individual buckets between clusters - but per-bucket reconciliation is not as efficient as full-cluster reconciliation.  The efficiency of full cluster reconciliation is based on the use of cached and mergeable [AAE (active anti-entropy) merkle trees](/docs/RiakTheoryGuide.md#anti-entropy) that represent all the data in the store.
 
@@ -298,6 +310,7 @@ The `pr` and `pw` bucket properties default to `0`, and are used to require prim
 
 Although configuring `pr`/`pw` to values greater than 1 may be used to indirectly set stronger data reliability guarantees, or to adjust consistency guarantees - there are better ways of achieving this in Riak, which have fewer negative side effects.  Consider using [`node_confirms`](#property---node_confirms) or [`sync_on_write`](#property---sync_on_write) to manage data reliability.  The use of [token-based conditional PUTs](/docs/ObjectAPI.md#conditional-requests) is the preferred approach, rather than `pr`/`pw` adjustments for tuning consistency.
 
+{: .note }
 > It is normally best practice to configure either `{pr, 1}` or `{notfound_ok, false}`, rather than rely on defaults.
 
 If both `pr` and `notfound_ok` are left at defaults, there is a potential issue when at least two nodes have failed and for some objects 2 of the 3 vnodes are unpopulated fallbacks.  In this case, without changing defaults, the two unpopulated fallback vnodes can return `not_found` and the GET request can achieve quorum and return a false `not_found` to the client.  By configuring either `{pr, 1}` or `{notfound_ok, false}`, when there is only one populated/primary vnode, the GET request must wait for this vnode to respond.
