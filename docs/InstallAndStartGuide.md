@@ -274,6 +274,7 @@ If replicating between clusters and `one` is used as the `sync_on_write` bucket 
 
 #### Property - aae_tree_exclude
 
+{: .d-inline-block }
 Available from Riak 3.4
 {: .label .label-purple }
 
