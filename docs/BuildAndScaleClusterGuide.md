@@ -1,3 +1,8 @@
+---
+title: Build and Scale a Cluster
+nav_order: 3
+---
+
 # Riak KV - Building and Scaling a Cluster
 
 This guide is split into two parts:

@@ -1,3 +1,8 @@
+---
+title: Install and Start
+nav_order: 2
+---
+
 # Riak KV - Install and Start
 
 ## Installation

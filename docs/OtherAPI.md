@@ -1,3 +1,8 @@
+---
+title: Other APIs
+nav_order: 6
+---
+
 # Riak KV - Other APIs
 
 The majority of work within Riak KV can be done using the [Object API](/ObjectAPI.md), and the [Query API](/QueryAPI.md).  There are though additional APIs, with specific purposes:

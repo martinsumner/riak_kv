@@ -1,0 +1,8 @@
+title: OpenRiak Quick Docs
+description: starter documentation for the OpenRiak Riak project
+theme: just-the-docs
+
+url: https://martinsumner.github.io/riak_kv/docs
+
+aux_links:
+  Template Repository: https://github.com/just-the-docs/just-the-docs-template

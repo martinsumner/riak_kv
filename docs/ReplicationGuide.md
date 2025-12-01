@@ -1,3 +1,8 @@
+---
+title: Replication and Reconciliation
+nav_order: 7
+---
+
 # Riak KV - Replication and Reconciliation
 
 There are a number of replication versions in Riak:

@@ -1,3 +1,8 @@
+---
+title: Operations and Troubleshooting
+nav_order: 8
+---
+
 # Riak KV - Operations and Troubleshooting
 
 The following sections provide guidance when operating or troubleshooting a Riak cluster:

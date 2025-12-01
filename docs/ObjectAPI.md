@@ -1,3 +1,8 @@
+---
+title: Object API
+nav_order: 4
+---
+
 # Riak KV - Object API
 
 Objects can be fetched and updated via either a HTTP or Protocol Buffer API.  Considerations to be made when choosing a transport protocol include:

@@ -1,3 +1,8 @@
+---
+title: Riak Theory
+nav_order: 9
+---
+
 # Riak KV - Theory Guide
 
 This guide is a work in progress, and provides insight into the underlying theories and processes which underpin the function of a Riak cluster.  Understanding this theory will be helpful to understand the design, setup and operation of a Riak cluster.

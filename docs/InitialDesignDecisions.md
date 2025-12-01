@@ -1,3 +1,8 @@
+---
+title: Initial Design Decisions
+nav_order: 1
+---
+
 # Riak KV - Initial Design Decisions
 
 When starting with Riak a number of initial design decisions need to be made at the outset of the project.  This is a summary of those decisions, and the factors relevant to making each choice.
