@@ -40,7 +40,7 @@ The Riak replication and reconciliation (full-sync) system has the following fea
   - Support for low-impact suspension and resumption of replication,
   - Prevents recipient clusters from being overwhelmed by replicated PUT volumes.
 - Provides very efficient reconciliation to confirm whole clusters are synchronised;
-  - i.e. Confirmation that across multiple clusters all objects both exist, and are at the same version.
+  - i.e. Confirmation that across multiple clusters all objects are at the same version.
 - Efficient and fast resolution of small deltas between clusters;
   - With a specific focus on accelerating the recovery of recently occurring deltas (e.g. following a failure or real-time replication).
 - Uses an API which is reusable for replication to and reconciliation with non-Riak databases.
