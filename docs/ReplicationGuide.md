@@ -156,6 +156,8 @@ There are two configuration items required to set up a source for real-time repl
 
 For replication, the real-time replication source must be enabled on every node in the cluster, as a PUT may be coordinated from any vnode (on any node), regardless of which node received the PUT request.
 
+> By convention, the name of the queues are normally aligned with the names of the cluster that is to consume from the queue i.e. `<sink_cluster_name>`.  However, the name can be anything descriptive for the context in which the queue is to be used.
+
 ### Enable a Real-Time Sink
 
 There are five configuration items required to set up a sink for real-time replication.  They are all set via `riak.conf`:
@@ -163,6 +165,7 @@ There are five configuration items required to set up a sink for real-time repli
 - `replrtq_enablesink = enabled`.
 - `replrtq_sinkqueue = <sink_cluster_name>`;
   - The name of the queue, on any source node or cluster from which this sink may need to consume replication events.
+  - The name of the queue does not need to be the cluster name, it can be any description that is helpful in context.
 - `replrtq_sinkpeers = <ip_addr>:<port>:<protocol>|<ip_addr>:<port>:<protocol>` ...
   - A pipe delimited list of peers by IP, port and protocol (`pb` or `http`).
     - For efficiency, it is recommended to use the PB protocol.
