@@ -5,7 +5,7 @@ theme: just-the-docs
 plugins:
   - jekyll-relative-links
 
-url: https://openriak.github.io/quickdocs/
+url: https://martinsumner.github.io/riak_kv/
 
 aux_links:
   "Discuss OpenRiak on GitHub": https://github.com/orgs/OpenRiak/discussions
