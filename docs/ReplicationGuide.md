@@ -319,7 +319,7 @@ If it can be determined from the results of previous checks, that all deltas are
 <span>Available from Riak 3.0.15</span>{: .label .label-green }The preferred check approach is to use `ttaaefs_autocheck`.  This is a check that uses context to select an appropriate `ttaaefs_rangecheck` when possible, and only fallback to `ttaaefs_allcheck` if necessary.  For example, if a cluster falls out of sync, it will assume first that the delta is a modified date range since the last successful check.
 
 {: .highlight }
-> The ability to set a schedule of specific checks (e.g. `ttaaefs_allcheck`, `ttaaefs_hourcheck` etc) has been maintained, but from Riak 3.0.15 it is reocmmended that the schdule of checks should only be configured to use `ttaaefs_autocheck`.
+> The ability to set a schedule of specific checks (e.g. `ttaaefs_allcheck`, `ttaaefs_hourcheck` etc) has been maintained, but from Riak 3.0.15 it is recommended that the schedule of checks should only be configured to use `ttaaefs_autocheck`.
 
 The schedule of reconciliation jobs is configured for each peer by setting:
 
