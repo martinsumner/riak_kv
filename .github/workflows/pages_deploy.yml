@@ -10,7 +10,7 @@ on:
   push:
     branches:
       - openriak-3.4
-      - mas-o34-orkv.i84-mermaid
+      - mas-o34-orkv.i94-mermaid
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
