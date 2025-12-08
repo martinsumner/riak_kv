@@ -242,6 +242,23 @@ The leveled datastore is designed using an actor model, the primary actors being
 - Monitor;
   - A central process for receiving stats from the other processes and reporting via scheduled logs the latest statistics for the store.
 
+```mermaid
+stateDiagram-v2
+    [*] --> Bookie: All Requests
+    Bookie --> Penciller: Keys/Indexes/Metadata Requests
+    Penciller --> PManifest: Controls
+    PManifest --> Ledger: Describes
+    PClerk --> Penciller: Request Compaction Work
+    PClerk --> Penciller: Send Manifest Updates
+    PClerk --> Ledger: Compacts
+    Bookie --> Inker: Object Requests
+    Inker --> IClerk : Prompt Compaction Work
+    IClerk --> Inker: Send Manifest Updates
+    IClerk --> Journal: Compacts
+    Inker --> IManifest: Controls
+    IManifest --> Journal: Describes
+```
+
 #### Caching and Acceleration
 
 Each process within Leveled has an in-memory state, that contains:
